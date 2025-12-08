@@ -15,12 +15,12 @@ def load_data():
         df = pd.read_csv(github_url)
     
     # Clean and calculate
-    df["PAN"] = pd.to_numeric(df["PAN"], errors='coerce').fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0).astype(int)
+    df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
+    df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
     
-    # Add missing contact/Ofsted columns
+    # Ensure contact/Ofsted columns exist
     for col in ["Phone", "Website", "Ofsted Rating", "Last Inspection"]:
         if col not in df.columns:
             df[col] = ""
@@ -28,26 +28,26 @@ def load_data():
     # Normalize Website column
     df["Website"] = df["Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["Website"] = df["Website"].apply(
-        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
+        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://","https://")) else x
     )
     
     # Ofsted badge
-    def ofsted_emoji(r):
+    def ofsted_badge(r):
         if "Outstanding" in str(r): return "Outstanding"
         if "Good" in str(r): return "Good"
         if "Requires" in str(r): return "Requires Improvement"
         if "Inadequate" in str(r): return "Inadequate"
         return "Awaiting"
-    df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_emoji)
+    df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
     
     return df
 
 merged = load_data()
 
 # --- Page Config ---
-st.set_page_config(page_title="London Catholic Schools 2025", page_icon="Cross", layout="centered")
+st.set_page_config(page_title="London Catholic Schools 2025", page_icon="📘", layout="centered")
 
-# --- Beautiful Header ---
+# --- Header ---
 st.markdown("""
 <h1 style="text-align:center; color:#0055a5; font-size:2.5rem;">Cross London Catholic Schools 2025</h1>
 <p style="text-align:center; font-size:1.2rem; color:#444;">Real chances • Phone • Website • Ofsted • For parents</p>
@@ -115,16 +115,11 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
         if school["Ofsted Rating"]:
             st.caption(f"Ofsted {school['Ofsted Badge']} • Last: {school['Last Inspection']}")
         
-        # Contact buttons
-        btns = st.columns(3)
+        # Contact info
         if school.get("Phone"):
-            with btns[0]:
-                st.markdown(f'<a href="tel:{school["Phone"]}"><button style="width:100%;padding:10px;background:#0055a5;color:white;border:none;border-radius:8px;">Call</button></a>', unsafe_allow_html=True)
+            st.markdown(f"📞 {school['Phone']}")
         if school.get("Website"):
-            with btns[1]:
-                st.markdown(f'<a href="{school["Website"]}" target="_blank"><button style="width:100%;padding:10px;background:#0055a5;color:white;border:none;border-radius:8px;">Website</button></a>', unsafe_allow_html=True)
-        with btns[2]:
-            st.write("")  # spacer
+            st.markdown(f"🌐 [Visit Website]({school['Website']})")
         
         st.markdown("---")
 
@@ -132,7 +127,7 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
 if {"Latitude", "Longitude"}.issubset(filtered.columns):
     map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna().rename(columns={"Latitude": "lat", "Longitude": "lon"})
     st.map(map_data)
-    
+
 # --- Download ---
 csv = filtered.to_csv(index=False).encode()
 st.download_button("Download Results + Contacts", csv, f"{selected_borough}_Catholic_2025.csv", "text/csv")
@@ -142,4 +137,4 @@ with st.expander("Top 10 Most Oversubscribed Catholic Schools"):
     top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
     st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
 
-st.caption("Built with love by a London parent • 2025 admissions • Phone • Website • Ofsted • Mobile-ready")
+st.caption("Built with ❤️ by a London parent • 2025 admissions • Phone • Website • Ofsted • Mobile-ready")
