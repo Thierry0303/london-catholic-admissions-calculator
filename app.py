@@ -37,20 +37,21 @@ baptised = st.sidebar.checkbox("Child is baptised Catholic", value=True)
 church_attendance = st.sidebar.checkbox("Regular church attendance (weekly/fortnightly)", value=True)
 sibling = st.sidebar.checkbox("Sibling already at the school", value=False)
 
-# --- Realistic Likelihood Calculator ---
+# --- Realistic Likelihood Calculator (based on real policies) ---
 def calculate_likelihood(row):
     priority_score = 0
     if sibling:
-        priority_score += 40
+        priority_score += 40                    # Sibling nearly always trumps everything
     if baptised and church_attendance:
-        priority_score += 35
+        priority_score += 35                    # Practising Catholic = top tier
     elif baptised:
-        priority_score += 18
+        priority_score += 18                    # Baptised but non-practising = mid tier
     else:
-        priority_score += 5
+        priority_score += 5                     # Non-Catholic = very low unless exceptional
 
     oversub = row["Oversub Ratio"]
 
+    # Realistic chance based on priority + competition
     if priority_score >= 70:  # Sibling + practising
         chance = max(15, 98 - (oversub - 100) * 0.25)
     elif priority_score >= 50:  # Practising Catholic
@@ -62,7 +63,7 @@ def calculate_likelihood(row):
 
     return min(100, round(chance, 1))
 
-# --- Apply filters ---
+# --- Apply all filters ---
 filtered = merged[merged["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 
@@ -74,22 +75,14 @@ filtered["Admission Likelihood %"] = filtered.apply(calculate_likelihood, axis=1
 
 filtered_threshold = filtered[filtered["Oversub Ratio"] > threshold]
 
-# --- Helper: clickable website links ---
-def make_clickable(url):
-    if pd.notnull(url) and str(url).startswith("http"):
-        return f"[Visit site]({url})"
-    return "N/A"
-
-if "Website" in filtered.columns:
-    filtered["Website"] = filtered["Website"].apply(make_clickable)
-
-# --- Main Results Table ---
+# --- Main Results Table (the one parents love) ---
 st.subheader(f"🏫 All Catholic Schools in {selected_borough}")
 display = filtered[["School Name", "Phase", "Postcode", "PAN", "Apps Received 2025", 
-                    "Oversub Ratio", "Admission Likelihood %", "Website"]].copy()
+                    "Oversub Ratio", "Admission Likelihood %"]].copy()
 
 display = display.sort_values("Admission Likelihood %", ascending=False)
 
+# Colour coding
 st.dataframe(
     display.style
     .bar(subset=["Oversub Ratio"], color="#ff9999")
@@ -98,10 +91,10 @@ st.dataframe(
     use_container_width=True
 )
 
-# --- Highlight tough ones ---
+# --- Highlight the really tough ones ---
 if not filtered_threshold.empty:
     st.subheader(f"🔥 Highly Competitive Schools (>{threshold}%)")
-    tough = filtered_threshold[["School Name", "PAN", "Apps Received 2025", "Oversub Ratio", "Admission Likelihood %", "Website"]]
+    tough = filtered_threshold[["School Name", "PAN", "Apps Received 2025", "Oversub Ratio", "Admission Likelihood %"]]
     st.dataframe(
         tough.sort_values("Oversub Ratio", ascending=False)
         .style.bar(subset=["Oversub Ratio"], color="#ff4d4d")
@@ -122,6 +115,7 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns):
     
     st.map(map_data, size=80, color="#d40000")
     
+    # Optional: Show table below map
     with st.expander("📍 See exact coordinates + your chances"):
         st.dataframe(
             map_data[["School Name", "Admission Likelihood %", "lat", "lon"]]
