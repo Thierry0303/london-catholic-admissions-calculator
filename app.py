@@ -14,7 +14,7 @@ def load_data():
         df = pd.read_csv(github_url)
 
     df["PAN"] = pd.to_numeric(df["PAN"], errors='coerce').fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0)
+    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0).astype(int)
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
     return df
@@ -51,13 +51,9 @@ st.markdown("""
 st.sidebar.header("🔍 Filters")
 
 selected_borough = st.sidebar.selectbox("Choose Borough", sorted(merged["Local Authority"].dropna().unique()))
-
-# Dropdown instead of slider
 threshold = st.sidebar.selectbox("Oversubscription threshold (%)", [100, 200, 300, 400, 500])
-
 selected_phase = st.sidebar.multiselect("Phase", options=sorted(merged["Phase"].dropna().unique()),
                                         default=sorted(merged["Phase"].dropna().unique()))
-
 postcode_query = st.sidebar.text_input("Postcode search (e.g. SW6, W3, SE19)")
 
 with st.sidebar.expander("🙏 Admission Criteria"):
@@ -99,12 +95,10 @@ if postcode_query:
 
 filtered = filtered.copy()
 filtered["Admission Likelihood %"] = filtered.apply(calculate_likelihood, axis=1)
-
 filtered_threshold = filtered[filtered["Oversub Ratio"] > threshold]
 
 # --- Results Table with Pagination ---
 st.subheader(f"🏫 Catholic Schools in {selected_borough}")
-
 page_size = 10
 page = st.number_input("Page", min_value=1, max_value=(len(filtered)//page_size)+1, value=1)
 start = (page-1)*page_size
@@ -117,7 +111,11 @@ st.dataframe(
     display.style
     .bar(subset=["Oversub Ratio"], color="#ff9999")
     .bar(subset=["Admission Likelihood %"], color="#90ee90")
-    .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
+    .format({
+        "Apps Received 2025": "{:,.0f}",
+        "Oversub Ratio": "{:.0f}%",
+        "Admission Likelihood %": "{:.0f}%"
+    }),
     use_container_width=True
 )
 
@@ -128,7 +126,11 @@ if not filtered_threshold.empty:
     st.dataframe(
         tough.sort_values("Oversub Ratio", ascending=False)
         .style.bar(subset=["Oversub Ratio"], color="#ff4d4d")
-        .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
+        .format({
+            "Apps Received 2025": "{:,.0f}",
+            "Oversub Ratio": "{:.0f}%",
+            "Admission Likelihood %": "{:.0f}%"
+        }),
         use_container_width=True
     )
 
