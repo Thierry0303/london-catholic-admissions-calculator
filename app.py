@@ -94,6 +94,19 @@ def calculate_likelihood(row):
 
     return min(100, round(chance, 1))
 
+# --- Composite Quality Score ---
+def quality_score(row):
+    grade_map = {"A+": 5, "A": 4.5, "A-": 4, "B+": 3.5, "B": 3, "B-": 2.5}
+    grade_val = grade_map.get(str(row.get("Snobe Overall Grade", "")).strip(), 0)
+
+    ofsted_map = {"Outstanding": 5, "Good": 4, "Requires Improvement": 2, "Inadequate": 1}
+    ofsted_val = ofsted_map.get(str(row.get("Ofsted Badge", "")).strip(), 0)
+
+    oversub_penalty = 1 / (1 + row.get("Oversub Ratio", 0))
+    return round((grade_val + ofsted_val) * oversub_penalty, 2)
+
+merged["Quality Score"] = merged.apply(quality_score, axis=1)
+
 # --- Filter ---
 filtered = merged[merged["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
@@ -122,13 +135,38 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
             st.markdown(f"**{school['School Name']}** • {school['Phase']}")
             st.caption(f"{school['Postcode']} • Oversub: {school['Oversub Ratio']}%")
 
-            badges = []
-            if school.get("Snobe Overall Grade") and str(school["Snobe Overall Grade"]).strip():
-                badges.append(f"Snobe {school['Snobe Overall Grade']}")
-            if school.get("Ofsted Badge") and school["Ofsted Badge"] != "Awaiting":
-                badges.append(f"Ofsted {school['Ofsted Badge']}")
-            if badges:
-                st.caption(" • ".join(badges))
+            # --- Rating Display with tooltips ---
+            rating_parts = []
+            snobe_grade = str(school.get("Snobe Overall Grade", "")).strip()
+            ofsted = str(school.get("Ofsted Badge", "")).strip()
+
+            if snobe_grade:
+                grade_tooltip = {
+                    "A+": "Top 5% nationally",
+                    "A": "Excellent overall performance",
+                    "A-": "Very strong school",
+                    "B+": "Above average",
+                    "B": "Solid performance",
+                    "B-": "Room for improvement"
+                }.get(snobe_grade, "Rated by Snobe")
+                rating_parts.append(
+                    f"<span title='{grade_tooltip}' style='color:#4CAF50;font-weight:bold;'>Snobe {snobe_grade}</span>"
+                )
+
+            if ofsted and ofsted != "Awaiting":
+                ofsted_tooltip = {
+                    "Outstanding": "Highest Ofsted rating",
+                    "Good": "Consistently strong teaching and outcomes",
+                    "Requires Improvement": "Some weaknesses identified",
+                    "Inadequate": "Serious concerns raised"
+                }.get(ofsted, "Ofsted rating")
+                rating_parts.append(
+                    f"<span title='{ofsted_tooltip}' style='color:#2196F3;font-weight:bold;'>Ofsted {ofsted}</span>"
+                )
+
+            if rating_parts:
+                rating_html = " • ".join(rating_parts)
+                st.markdown(f"<div style='margin-top:4px;font-size:0.95rem;'>{rating_html}</div>", unsafe_allow_html=True)
 
         with col2:
             chance = int(school['Your Chance'])
@@ -141,21 +179,9 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
         if school.get("School Website") and pd.notnull(school["School Website"]) and str(school["School Website"]).strip():
             st.markdown(f"🌐 [Visit Website]({school['School Website']})")
 
+        st.caption(f"Quality Score: {school['Quality Score']}")
         st.markdown("---")
 
 # --- Map ---
 if {"Latitude", "Longitude"}.issubset(filtered.columns):
-    map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna()
-    map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
-    st.map(map_data)
-
-# --- Download ---
-csv = filtered.to_csv(index=False).encode()
-st.download_button("Download Results + Contacts", csv, f"{selected_borough}_Catholic_2025.csv", "text/csv")
-
-# --- Top 10 ---
-with st.expander("Top 10 Most Oversubscribed Catholic Schools"):
-    top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
-    st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
-
-st.caption("Built by a London parent • 2025 admissions • Website • Ofsted • Snobe • Mobile-ready")
+    map_data = filtered[
