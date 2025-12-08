@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import numpy as np
 
 # --- Load Data (works locally + on Streamlit Cloud) ---
 @st.cache_data
@@ -24,7 +25,13 @@ def load_data():
         if col not in df.columns:
             df[col] = ""
     
-    # Ofsted emoji
+    # Normalize Website column
+    df["Website"] = df["Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
+    df["Website"] = df["Website"].apply(
+        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
+    )
+    
+    # Ofsted badge
     def ofsted_emoji(r):
         if "Outstanding" in str(r): return "Outstanding"
         if "Good" in str(r): return "Good"
@@ -58,7 +65,7 @@ with st.sidebar:
         church_attendance = st.checkbox("Regular church attendance", True)
         sibling = st.checkbox("Sibling at school", False)
 
-# --- Your original realistic calculator ---
+# --- Likelihood Calculator ---
 def calculate_likelihood(row):
     priority_score = 0
     if sibling: priority_score += 40
@@ -77,7 +84,6 @@ filtered = merged[merged["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 if postcode_query:
     filtered = filtered[filtered["Postcode"].str.contains(postcode_query.strip(), case=False, na=False)]
-
 filtered = filtered.copy()
 filtered["Your Chance"] = filtered.apply(calculate_likelihood, axis=1)
 
@@ -91,7 +97,7 @@ elif baptised:
 else:
     st.warning("Non-Catholic places are very limited")
 
-# --- Results: Beautiful Mobile Cards ---
+# --- Results: Mobile Cards ---
 st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''} in {selected_borough}")
 
 for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows():
@@ -107,9 +113,8 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
         
         # Ofsted
         if school["Ofsted Rating"]:
-            badge_color = {"Outstanding": "#1B5E20", "Good": "#33691E", "Requires Improvement": "#E65100", "Inadequate": "#B71C1C"}.get(school["Ofsted Badge"], "#757575")
             st.caption(f"Ofsted {school['Ofsted Badge']} • Last: {school['Last Inspection']}")
-
+        
         # Contact buttons
         btns = st.columns(3)
         if school.get("Phone"):
@@ -120,14 +125,14 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
                 st.markdown(f'<a href="{school["Website"]}" target="_blank"><button style="width:100%;padding:10px;background:#0055a5;color:white;border:none;border-radius:8px;">Website</button></a>', unsafe_allow_html=True)
         with btns[2]:
             st.write("")  # spacer
-
+        
         st.markdown("---")
 
 # --- Map ---
 if {"Latitude", "Longitude"}.issubset(filtered.columns):
     map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna().rename(columns={"Latitude": "lat", "Longitude": "lon"})
-    st.map(map_data, size=100, color="#d40000")
-
+    st.map(map_data)
+    
 # --- Download ---
 csv = filtered.to_csv(index=False).encode()
 st.download_button("Download Results + Contacts", csv, f"{selected_borough}_Catholic_2025.csv", "text/csv")
@@ -137,4 +142,4 @@ with st.expander("Top 10 Most Oversubscribed Catholic Schools"):
     top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
     st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
 
-st.caption("Built with love by a London parent • 2025 admissions • Phone • Ofsted • Mobile-ready")
+st.caption("Built with love by a London parent • 2025 admissions • Phone • Website • Ofsted • Mobile-ready")
