@@ -56,4 +56,99 @@ def calculate_likelihood(row):
     elif priority_score >= 50:  # Practising Catholic
         chance = max(8, 90 - (oversub - 100) * 0.6)
     elif priority_score >= 20:  # Baptised only
-        chance
+        chance = max(3, 65 - oversub * 0.8)
+    else:
+        chance = max(1, 40 - oversub)
+
+    return min(100, round(chance, 1))
+
+# --- Apply filters ---
+filtered = merged[merged["Local Authority"] == selected_borough]
+filtered = filtered[filtered["Phase"].isin(selected_phase)]
+
+if postcode_query:
+    filtered = filtered[filtered["Postcode"].str.contains(postcode_query.strip(), case=False, na=False)]
+
+filtered = filtered.copy()
+filtered["Admission Likelihood %"] = filtered.apply(calculate_likelihood, axis=1)
+
+filtered_threshold = filtered[filtered["Oversub Ratio"] > threshold]
+
+# --- Helper: clickable website links ---
+def make_clickable(url):
+    if pd.notnull(url) and str(url).startswith("http"):
+        return f"[Visit site]({url})"
+    return "N/A"
+
+if "Website" in filtered.columns:
+    filtered["Website"] = filtered["Website"].apply(make_clickable)
+
+# --- Main Results Table ---
+st.subheader(f"🏫 All Catholic Schools in {selected_borough}")
+display = filtered[["School Name", "Phase", "Postcode", "PAN", "Apps Received 2025", 
+                    "Oversub Ratio", "Admission Likelihood %", "Website"]].copy()
+
+display = display.sort_values("Admission Likelihood %", ascending=False)
+
+st.dataframe(
+    display.style
+    .bar(subset=["Oversub Ratio"], color="#ff9999")
+    .bar(subset=["Admission Likelihood %"], color="#90ee90")
+    .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
+    use_container_width=True
+)
+
+# --- Highlight tough ones ---
+if not filtered_threshold.empty:
+    st.subheader(f"🔥 Highly Competitive Schools (>{threshold}%)")
+    tough = filtered_threshold[["School Name", "PAN", "Apps Received 2025", "Oversub Ratio", "Admission Likelihood %", "Website"]]
+    st.dataframe(
+        tough.sort_values("Oversub Ratio", ascending=False)
+        .style.bar(subset=["Oversub Ratio"], color="#ff4d4d")
+        .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
+        use_container_width=True
+    )
+
+# --- Top 10 Chart ---
+st.subheader("🏆 Top 10 Most Oversubscribed Catholic Schools in London (2025)")
+top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Local Authority", "Oversub Ratio"]]
+st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
+
+# --- Map ---
+st.subheader(f"🗺️ Map of Catholic Schools in {selected_borough}")
+if {"Latitude", "Longitude"}.issubset(filtered.columns):
+    map_data = filtered[["School Name", "Admission Likelihood %", "Latitude", "Longitude"]].dropna()
+    map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
+    
+    st.map(map_data, size=80, color="#d40000")
+    
+    with st.expander("📍 See exact coordinates + your chances"):
+        st.dataframe(
+            map_data[["School Name", "Admission Likelihood %", "lat", "lon"]]
+            .sort_values("Admission Likelihood %", ascending=False)
+        )
+else:
+    st.info("No coordinates found in dataset.")
+
+# --- Personal Advice ---
+st.markdown("### 🎯 Your Personal Advice")
+if sibling:
+    st.success("✅ **Strong position** — siblings nearly always get in, even at very oversubscribed schools!")
+elif baptised and church_attendance:
+    st.success("🙏 **Good position** — practising Catholic families get priority at nearly all schools.")
+elif baptised:
+    st.warning("⚠️ Baptism helps, but many schools require proof of regular practice.")
+else:
+    st.error("❌ Most Catholic schools give very low priority to non-Catholics unless exceptional circumstances.")
+
+# --- Download ---
+st.subheader("💾 Download Your Results")
+csv = filtered.to_csv(index=False).encode('utf-8')
+st.download_button(
+    "📥 Download this borough as CSV",
+    csv,
+    f"{selected_borough.replace(' ', '_')}_Catholic_Schools_2025.csv",
+    "text/csv"
+)
+
+st.caption("Built with ❤️ by a London parent | Data updated for 2025 admissions cycle")
