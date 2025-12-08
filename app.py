@@ -1,10 +1,18 @@
 import streamlit as st
 import pandas as pd
+import os
 
-# --- Load your existing CSV (this is the only file you need) ---
+# --- Load your CSV (works locally and on Streamlit Cloud) ---
 @st.cache_data
 def load_data():
-    df = pd.read_csv(r"C:\Users\Thier Ry\OneDrive\catholic-admission-app\Admission\catholic_schools_with_pan_coords.csv")
+    local_path = "catholic_schools_with_pan_coords.csv"
+    github_url = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
+
+    if os.path.exists(local_path):
+        df = pd.read_csv(local_path)
+    else:
+        df = pd.read_csv(github_url)
+
     df["PAN"] = pd.to_numeric(df["PAN"], errors='coerce').fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0)
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
@@ -27,7 +35,7 @@ selected_borough = st.sidebar.selectbox("Borough", sorted(merged["Local Authorit
 
 threshold = st.sidebar.slider("Show only schools oversubscribed above (%)", 100, 1000, 200, 50)
 
-selected_phase = st.sidebar.multiselect("Phase", options=sorted(merged["Phase"].dropna().unique()), 
+selected_phase = st.sidebar.multiselect("Phase", options=sorted(merged["Phase"].dropna().unique()),
                                         default=sorted(merged["Phase"].dropna().unique()))
 
 postcode_query = st.sidebar.text_input("Postcode search (e.g. SW6, W3, SE19)")
@@ -37,33 +45,32 @@ baptised = st.sidebar.checkbox("Child is baptised Catholic", value=True)
 church_attendance = st.sidebar.checkbox("Regular church attendance (weekly/fortnightly)", value=True)
 sibling = st.sidebar.checkbox("Sibling already at the school", value=False)
 
-# --- Realistic Likelihood Calculator (based on real policies) ---
+# --- Likelihood Calculator ---
 def calculate_likelihood(row):
     priority_score = 0
     if sibling:
-        priority_score += 40                    # Sibling nearly always trumps everything
+        priority_score += 40
     if baptised and church_attendance:
-        priority_score += 35                    # Practising Catholic = top tier
+        priority_score += 35
     elif baptised:
-        priority_score += 18                    # Baptised but non-practising = mid tier
+        priority_score += 18
     else:
-        priority_score += 5                     # Non-Catholic = very low unless exceptional
+        priority_score += 5
 
     oversub = row["Oversub Ratio"]
 
-    # Realistic chance based on priority + competition
-    if priority_score >= 70:  # Sibling + practising
+    if priority_score >= 70:
         chance = max(15, 98 - (oversub - 100) * 0.25)
-    elif priority_score >= 50:  # Practising Catholic
+    elif priority_score >= 50:
         chance = max(8, 90 - (oversub - 100) * 0.6)
-    elif priority_score >= 20:  # Baptised only
+    elif priority_score >= 20:
         chance = max(3, 65 - oversub * 0.8)
     else:
         chance = max(1, 40 - oversub)
 
     return min(100, round(chance, 1))
 
-# --- Apply all filters ---
+# --- Apply filters ---
 filtered = merged[merged["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 
@@ -75,14 +82,13 @@ filtered["Admission Likelihood %"] = filtered.apply(calculate_likelihood, axis=1
 
 filtered_threshold = filtered[filtered["Oversub Ratio"] > threshold]
 
-# --- Main Results Table (the one parents love) ---
+# --- Results Table ---
 st.subheader(f"🏫 All Catholic Schools in {selected_borough}")
-display = filtered[["School Name", "Phase", "Postcode", "PAN", "Apps Received 2025", 
+display = filtered[["School Name", "Phase", "Postcode", "PAN", "Apps Received 2025",
                     "Oversub Ratio", "Admission Likelihood %"]].copy()
 
 display = display.sort_values("Admission Likelihood %", ascending=False)
 
-# Colour coding
 st.dataframe(
     display.style
     .bar(subset=["Oversub Ratio"], color="#ff9999")
@@ -91,7 +97,7 @@ st.dataframe(
     use_container_width=True
 )
 
-# --- Highlight the really tough ones ---
+# --- Tough Schools ---
 if not filtered_threshold.empty:
     st.subheader(f"🔥 Highly Competitive Schools (>{threshold}%)")
     tough = filtered_threshold[["School Name", "PAN", "Apps Received 2025", "Oversub Ratio", "Admission Likelihood %"]]
@@ -112,10 +118,8 @@ st.subheader(f"🗺️ Map of Catholic Schools in {selected_borough}")
 if {"Latitude", "Longitude"}.issubset(filtered.columns):
     map_data = filtered[["School Name", "Admission Likelihood %", "Latitude", "Longitude"]].dropna()
     map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
-    
     st.map(map_data, size=80, color="#d40000")
-    
-    # Optional: Show table below map
+
     with st.expander("📍 See exact coordinates + your chances"):
         st.dataframe(
             map_data[["School Name", "Admission Likelihood %", "lat", "lon"]]
