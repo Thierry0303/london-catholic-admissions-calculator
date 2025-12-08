@@ -1,140 +1,59 @@
 import streamlit as st
 import pandas as pd
-import os
 
-# --- Load Data (works locally + on Streamlit Cloud) ---
+# --- Load your existing CSV (this is the only file you need) ---
 @st.cache_data
 def load_data():
-    local_path = "catholic_schools_with_pan_coords.csv"
-    github_url = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
-    
-    if os.path.exists(local_path):
-        df = pd.read_csv(local_path)
-    else:
-        df = pd.read_csv(github_url)
-    
-    # Clean and calculate
+    df = pd.read_csv(r"C:\Users\Thier Ry\OneDrive\catholic-admission-app\Admission\catholic_schools_with_pan_coords.csv")
     df["PAN"] = pd.to_numeric(df["PAN"], errors='coerce').fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0).astype(int)
+    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0)
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
-    
-    # Add missing contact/Ofsted columns
-    for col in ["Phone", "Website", "Ofsted Rating", "Last Inspection"]:
-        if col not in df.columns:
-            df[col] = ""
-    
-    # Ofsted emoji
-    def ofsted_emoji(r):
-        if "Outstanding" in str(r): return "Outstanding"
-        if "Good" in str(r): return "Good"
-        if "Requires" in str(r): return "Requires Improvement"
-        if "Inadequate" in str(r): return "Inadequate"
-        return "Awaiting"
-    df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_emoji)
-    
     return df
 
 merged = load_data()
 
-# --- Page Config ---
-st.set_page_config(page_title="London Catholic Schools 2025", page_icon="Cross", layout="centered")
-
-# --- Beautiful Header ---
+# --- Streamlit UI ---
+st.set_page_config(page_title="London Catholic Schools Admission 2025", layout="wide")
+st.title("🏛️ London Catholic Schools Admission Calculator 2025")
 st.markdown("""
-<h1 style="text-align:center; color:#0055a5; font-size:2.5rem;">Cross London Catholic Schools 2025</h1>
-<p style="text-align:center; font-size:1.2rem; color:#444;">Real chances • Phone • Website • Ofsted • For parents</p>
-""", unsafe_allow_html=True)
+**The most accurate parent-built tool for Catholic school admissions in London**  
+Data: DfE GIAS PANs + Snobe applications + real coordinates
+""")
 
 # --- Sidebar ---
-with st.sidebar:
-    st.header("Filters")
-    selected_borough = st.selectbox("Borough", sorted(merged["Local Authority"].dropna().unique()))
-    selected_phase = st.multiselect("Phase", merged["Phase"].unique(), default=merged["Phase"].unique())
-    postcode_query = st.text_input("Postcode (e.g. SW6)")
-    
-    with st.expander("Admission Criteria", expanded=True):
-        baptised = st.checkbox("Baptised Catholic", True)
-        church_attendance = st.checkbox("Regular church attendance", True)
-        sibling = st.checkbox("Sibling at school", False)
+st.sidebar.header("🔍 Filters & Your Family")
+selected_borough = st.sidebar.selectbox("Borough", sorted(merged["Local Authority"].dropna().unique()))
 
-# --- Your original realistic calculator ---
+threshold = st.sidebar.slider("Show only schools oversubscribed above (%)", 100, 1000, 200, 50)
+
+selected_phase = st.sidebar.multiselect("Phase", options=sorted(merged["Phase"].dropna().unique()), 
+                                        default=sorted(merged["Phase"].dropna().unique()))
+
+postcode_query = st.sidebar.text_input("Postcode search (e.g. SW6, W3, SE19)")
+
+st.sidebar.markdown("### 🙏 Your Admission Criteria")
+baptised = st.sidebar.checkbox("Child is baptised Catholic", value=True)
+church_attendance = st.sidebar.checkbox("Regular church attendance (weekly/fortnightly)", value=True)
+sibling = st.sidebar.checkbox("Sibling already at the school", value=False)
+
+# --- Realistic Likelihood Calculator ---
 def calculate_likelihood(row):
     priority_score = 0
-    if sibling: priority_score += 40
-    if baptised and church_attendance: priority_score += 35
-    elif baptised: priority_score += 18
-    else: priority_score += 5
+    if sibling:
+        priority_score += 40
+    if baptised and church_attendance:
+        priority_score += 35
+    elif baptised:
+        priority_score += 18
+    else:
+        priority_score += 5
+
     oversub = row["Oversub Ratio"]
-    if priority_score >= 70: chance = max(15, 98 - (oversub - 100) * 0.25)
-    elif priority_score >= 50: chance = max(8, 90 - (oversub - 100) * 0.6)
-    elif priority_score >= 20: chance = max(3, 65 - oversub * 0.8)
-    else: chance = max(1, 40 - oversub)
-    return min(100, round(chance, 1))
 
-# --- Filter ---
-filtered = merged[merged["Local Authority"] == selected_borough]
-filtered = filtered[filtered["Phase"].isin(selected_phase)]
-if postcode_query:
-    filtered = filtered[filtered["Postcode"].str.contains(postcode_query.strip(), case=False, na=False)]
-
-filtered = filtered.copy()
-filtered["Your Chance"] = filtered.apply(calculate_likelihood, axis=1)
-
-# --- Personal Advice ---
-if sibling:
-    st.success("Siblings nearly always get in — **you are in a very strong position!**")
-elif baptised and church_attendance:
-    st.success("Practising Catholic family — **excellent chances**")
-elif baptised:
-    st.info("Baptism helps, but many schools require proof of practice")
-else:
-    st.warning("Non-Catholic places are very limited")
-
-# --- Results: Beautiful Mobile Cards ---
-st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''} in {selected_borough}")
-
-for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows():
-    with st.container():
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown(f"**{school['School Name']}** • {school['Phase']}")
-            st.caption(f"{school['Postcode']} • Oversub: {school['Oversub Ratio']}%")
-        with col2:
-            chance = int(school['Your Chance'])
-            color = "#4CAF50" if chance >= 80 else "#FF9800" if chance >= 50 else "#F44336"
-            st.markdown(f"<div style='background:{color};color:white;padding:8px;border-radius:8px;text-align:center;font-weight:bold;'>{chance}%</div>", unsafe_allow_html=True)
-        
-        # Ofsted
-        if school["Ofsted Rating"]:
-            badge_color = {"Outstanding": "#1B5E20", "Good": "#33691E", "Requires Improvement": "#E65100", "Inadequate": "#B71C1C"}.get(school["Ofsted Badge"], "#757575")
-            st.caption(f"Ofsted {school['Ofsted Badge']} • Last: {school['Last Inspection']}")
-
-        # Contact buttons
-        btns = st.columns(3)
-        if school.get("Phone"):
-            with btns[0]:
-                st.markdown(f'<a href="tel:{school["Phone"]}"><button style="width:100%;padding:10px;background:#0055a5;color:white;border:none;border-radius:8px;">Call</button></a>', unsafe_allow_html=True)
-        if school.get("Website"):
-            with btns[1]:
-                st.markdown(f'<a href="{school["Website"]}" target="_blank"><button style="width:100%;padding:10px;background:#0055a5;color:white;border:none;border-radius:8px;">Website</button></a>', unsafe_allow_html=True)
-        with btns[2]:
-            st.write("")  # spacer
-
-        st.markdown("---")
-
-# --- Map ---
-if {"Latitude", "Longitude"}.issubset(filtered.columns):
-    map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna().rename(columns={"Latitude": "lat", "Longitude": "lon"})
-    st.map(map_data, size=100, color="#d40000")
-
-# --- Download ---
-csv = filtered.to_csv(index=False).encode()
-st.download_button("Download Results + Contacts", csv, f"{selected_borough}_Catholic_2025.csv", "text/csv")
-
-# --- Top 10 ---
-with st.expander("Top 10 Most Oversubscribed Catholic Schools"):
-    top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
-    st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
-
-st.caption("Built with love by a London parent • 2025 admissions • Phone • Ofsted • Mobile-ready")
+    if priority_score >= 70:  # Sibling + practising
+        chance = max(15, 98 - (oversub - 100) * 0.25)
+    elif priority_score >= 50:  # Practising Catholic
+        chance = max(8, 90 - (oversub - 100) * 0.6)
+    elif priority_score >= 20:  # Baptised only
+        chance
