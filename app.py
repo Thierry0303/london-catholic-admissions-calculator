@@ -63,4 +63,122 @@ def calculate_likelihood(row):
     else: priority_score += 5
 
     oversub = row["Oversub Ratio"]
-    if priority_score
+    if priority_score >= 70:
+        chance = max(15, 98 - (oversub - 100) * 0.25)
+    elif priority_score >= 50:
+        chance = max(8, 90 - (oversub - 100) * 0.6)
+    elif priority_score >= 20:
+        chance = max(3, 65 - oversub * 0.8)
+    else:
+        chance = max(1, 40 - oversub)
+
+    return min(100, round(chance, 1))
+
+# --- Composite Quality Score ---
+def quality_score(row):
+    grade_map = {"A+": 5, "A": 4.5, "A-": 4, "B+": 3.5, "B": 3, "B-": 2.5}
+    grade_val = grade_map.get(str(row.get("Snobe Overall Grade", "")).strip(), 0)
+
+    ofsted_map = {"Outstanding": 5, "Good": 4, "Requires Improvement": 2, "Inadequate": 1}
+    ofsted_val = ofsted_map.get(str(row.get("Ofsted Badge", "")).strip(), 0)
+
+    oversub_penalty = 1 / (1 + row.get("Oversub Ratio", 0))
+    return round((grade_val + ofsted_val) * oversub_penalty, 2)
+
+merged["Quality Score"] = merged.apply(quality_score, axis=1)
+
+# --- Sidebar ---
+with st.sidebar:
+    st.header("Filters")
+    boroughs = sorted([b for b in merged["Local Authority"].dropna().unique()])
+    selected_borough = st.selectbox("Borough", boroughs)
+    phases = list(merged["Phase"].dropna().unique())
+    selected_phase = st.multiselect("Phase", phases, default=phases)
+    postcode_query = st.text_input("Postcode (e.g. SW6)")
+
+    with st.expander("Admission criteria", expanded=True):
+        baptised = st.checkbox("Baptised Catholic", True)
+        church_attendance = st.checkbox("Regular church attendance", True)
+        sibling = st.checkbox("Sibling at school", False)
+
+# --- Filter ---
+filtered = merged[merged["Local Authority"] == selected_borough]
+filtered = filtered[filtered["Phase"].isin(selected_phase)]
+if postcode_query:
+    filtered = filtered[filtered["Postcode"].str.contains(postcode_query.strip(), case=False, na=False)]
+filtered = filtered.copy()
+filtered["Your Chance"] = filtered.apply(calculate_likelihood, axis=1)
+
+# --- Results Cards ---
+st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''} in {selected_borough}")
+
+for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows():
+    with st.container():
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"**{school['School Name']}** • {school['Phase']}")
+            st.caption(f"{school['Postcode']} • Oversub: {school['Oversub Ratio']}%")
+
+            # Ratings with tooltips
+            rating_parts = []
+            snobe_grade = str(school.get("Snobe Overall Grade", "")).strip()
+            ofsted = str(school.get("Ofsted Badge", "")).strip()
+
+            if snobe_grade:
+                grade_tooltip = {
+                    "A+": "Top 5% nationally",
+                    "A": "Excellent overall performance",
+                    "A-": "Very strong school",
+                    "B+": "Above average",
+                    "B": "Solid performance",
+                    "B-": "Room for improvement"
+                }.get(snobe_grade, "Rated by Snobe")
+                rating_parts.append(
+                    f"<span title='{grade_tooltip}' style='color:#4CAF50;font-weight:bold;'>Snobe {snobe_grade}</span>"
+                )
+
+            if ofsted and ofsted != "Awaiting":
+                ofsted_tooltip = {
+                    "Outstanding": "Highest Ofsted rating",
+                    "Good": "Consistently strong teaching and outcomes",
+                    "Requires Improvement": "Some weaknesses identified",
+                    "Inadequate": "Serious concerns raised"
+                }.get(ofsted, "Ofsted rating")
+                rating_parts.append(
+                    f"<span title='{ofsted_tooltip}' style='color:#2196F3;font-weight:bold;'>Ofsted {ofsted}</span>"
+                )
+
+            if rating_parts:
+                rating_html = " • ".join(rating_parts)
+                st.markdown(f"<div style='margin-top:4px;font-size:0.95rem;'>{rating_html}</div>", unsafe_allow_html=True)
+
+        with col2:
+            chance = int(school['Your Chance'])
+            color = "#4CAF50" if chance >= 80 else "#FF9800" if chance >= 50 else "#F44336"
+            st.markdown(
+                f"<div style='background:{color};color:white;padding:8px;border-radius:8px;text-align:center;font-weight:bold;'>{chance}%</div>",
+                unsafe_allow_html=True
+            )
+
+        if school.get("School Website") and pd.notnull(school["School Website"]) and str(school["School Website"]).strip():
+            st.markdown(f"🌐 [Visit Website]({school['School Website']})")
+
+        st.caption(f"Quality Score: {school['Quality Score']}")
+        st.markdown("---")
+
+# --- Map ---
+if {"Latitude", "Longitude"}.issubset(filtered.columns):
+    map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna()
+    map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
+    st.map(map_data)
+
+# --- Download ---
+csv = filtered.to_csv(index=False).encode()
+st.download_button("Download Results + Contacts", csv, f"{selected_borough}_Catholic_2025.csv", "text/csv")
+
+# --- Top 10 ---
+with st.expander("Top 10 Most Oversubscribed Catholic Schools"):
+    top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
+    st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
+
+st.caption("Built by a London parent • 2025 admissions • Website • Ofsted • Snobe • Mobile-ready")
