@@ -3,42 +3,19 @@ import pandas as pd
 import os
 import numpy as np
 
+st.set_page_config(page_title="London Catholic Schools 2025", page_icon="📘", layout="centered")
+
 # --- Config ---
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
-RATINGS_PATH = "schools_with_snobe_ratings.csv"
 
-st.set_page_config(page_title="London Catholic Schools 2025", page_icon="📘", layout="centered")
-
-# --- Load & Merge ---
+# --- Load Data ---
 @st.cache_data
 def load_data():
-    # Load admissions dataset
     if os.path.exists(FULL_PATH):
         df = pd.read_csv(FULL_PATH)
     else:
         df = pd.read_csv(FULL_GITHUB)
-
-    # Load ratings dataset if available
-    if os.path.exists(RATINGS_PATH):
-        ratings = pd.read_csv(RATINGS_PATH)
-
-        # Normalize URLs for join
-        df["url"] = df["url"].astype(str).str.strip().str.lower()
-        ratings["Snobe URL"] = ratings["Snobe URL"].astype(str).str.strip().str.lower()
-
-        # Merge
-        df = df.merge(
-            ratings[["Snobe URL", "Snobe Overall Grade", "Ofsted Rating", "School Website"]],
-            left_on="url",
-            right_on="Snobe URL",
-            how="left"
-        )
-        df.drop(columns=["Snobe URL"], inplace=True)
-
-        # Prefer ratings file values
-        df["Website"] = np.where(df["School Website"].notna(), df["School Website"], df.get("Website", ""))
-        df.drop(columns=["School Website"], inplace=True)
 
     # Clean numeric fields
     df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
@@ -48,9 +25,14 @@ def load_data():
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
 
+    # Ensure columns exist
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
+        if col not in df.columns:
+            df[col] = ""
+
     # Normalize Website links
-    df["Website"] = df["Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
-    df["Website"] = df["Website"].apply(
+    df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
+    df["School Website"] = df["School Website"].apply(
         lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://","https://")) else x
     )
 
@@ -156,8 +138,8 @@ for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows()
                 unsafe_allow_html=True
             )
 
-        if school.get("Website") and pd.notnull(school["Website"]) and str(school["Website"]).strip():
-            st.markdown(f"🌐 [Visit Website]({school['Website']})")
+        if school.get("School Website") and pd.notnull(school["School Website"]) and str(school["School Website"]).strip():
+            st.markdown(f"🌐 [Visit Website]({school['School Website']})")
 
         st.markdown("---")
 
