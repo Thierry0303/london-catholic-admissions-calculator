@@ -1,148 +1,170 @@
 import streamlit as st
 import pandas as pd
+import os
+import numpy as np
 
-# --- Load your existing CSV (this is the only file you need) ---
+st.set_page_config(page_title="London Catholic Schools 2025", page_icon="Cross", layout="centered")
+
+# ========================================
+#  CORRECT DATA LOADING – NO MORE CRASH!
+# ========================================
+FULL_PATH = "catholic_schools_with_pan_coords.csv"                                # in repo
+FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
+
 @st.cache_data
 def load_data():
-    df = pd.read_csv(r"C:\Users\Thier Ry\OneDrive\catholic-admission-app\Admission\catholic_schools_with_pan_coords.csv")
-    df["PAN"] = pd.to_numeric(df["PAN"], errors='coerce').fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors='coerce').fillna(0)
+    if os.path.exists(FULL_PATH):
+        df = pd.read_csv(FULL_PATH)
+    else:
+        df = pd.read_csv(FULL_GITHUB)          # fallback if running locally without file
+    
+    # Clean numeric columns
+    df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
+    df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
+    
+    # Oversubscription ratio
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
+    
+    # Ensure extra columns exist (so app never crashes)
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
+        if col not in df.columns:
+            df[col] = ""
+    
+    # Normalise website URLs
+    df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
+    df["School Website"] = df["School Website"].apply(
+        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://","https://")) else x
+    )
+    
+    # Ofsted badge
+    def ofsted_badge(r):
+        r = str(r)
+        if "Outstanding" in r: return "Outstanding"
+        if "Good" in r: return "Good"
+        if "Requires" in r: return "Requires Improvement"
+        if "Inadequate" in r: return "Inadequate"
+        return "Awaiting"
+    df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
+    
+    # Clean borough names
+    if "Local Authority" in df.columns:
+        df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
+    
     return df
 
 merged = load_data()
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="London Catholic Schools Admission Calculator 2025", layout="wide")
-st.title("🏛️ London Catholic Schools Admission Calculator 2025")
+# ========================================
+#  UI – BEAUTIFUL & MOBILE-READY
+# ========================================
 st.markdown("""
-**The most accurate parent-built tool for Catholic school admissions in London**  
-Data: DfE GIAS PANs + Snobe applications + real coordinates
-""")
+<h1 style="text-align:center; color:#0055a5; font-size:2.5rem;">Cross London Catholic Schools 2025</h1>
+<p style="text-align:center; font-size:1.2rem; color:#444;">Real chances • Website • Ofsted • Snobe grade • For parents</p>
+""", unsafe_allow_html=True)
 
 # --- Sidebar ---
-st.sidebar.header("🔍 Filters & Your Family")
-selected_borough = st.sidebar.selectbox("Borough", sorted(merged["Local Authority"].dropna().unique()))
+with st.sidebar:
+    st.header("Filters")
+    boroughs = sorted([b for b in merged["Local Authority"].dropna().unique()])
+    selected_borough = st.selectbox("Borough", boroughs)
+    phases = list(merged["Phase"].dropna().unique())
+    selected_phase = st.multiselect("Phase", phases, default=phases)
+    postcode_query = st.text_input("Postcode (e.g. SW6)")
 
-threshold = st.sidebar.slider("Show only schools oversubscribed above (%)", 100, 1000, 200, 50)
+    with st.expander("Admission criteria", expanded=True):
+        baptised = st.checkbox("Baptised Catholic", True)
+        church_attendance = st.checkbox("Regular church attendance", True)
+        sibling = st.checkbox("Sibling at school", False)
 
-selected_phase = st.sidebar.multiselect("Phase", options=sorted(merged["Phase"].dropna().unique()), 
-                                        default=sorted(merged["Phase"].dropna().unique()))
-
-postcode_query = st.sidebar.text_input("Postcode search (e.g. SW6, W3, SE19)")
-
-st.sidebar.markdown("### 🙏 Your Admission Criteria")
-baptised = st.sidebar.checkbox("Child is baptised Catholic", value=True)
-church_attendance = st.sidebar.checkbox("Regular church attendance (weekly/fortnightly)", value=True)
-sibling = st.sidebar.checkbox("Sibling already at the school", value=False)
-
-# --- Realistic Likelihood Calculator (based on real policies) ---
+# --- Likelihood Calculator (exactly your logic) ---
 def calculate_likelihood(row):
     priority_score = 0
-    if sibling:
-        priority_score += 40                    # Sibling nearly always trumps everything
-    if baptised and church_attendance:
-        priority_score += 35                    # Practising Catholic = top tier
-    elif baptised:
-        priority_score += 18                    # Baptised but non-practising = mid tier
-    else:
-        priority_score += 5                     # Non-Catholic = very low unless exceptional
-
+    if sibling: priority_score += 40
+    if baptised and church_attendance: priority_score += 35
+    elif baptised: priority_score += 18
+    else: priority_score += 5
+    
     oversub = row["Oversub Ratio"]
-
-    # Realistic chance based on priority + competition
-    if priority_score >= 70:  # Sibling + practising
+    if priority_score >= 70:
         chance = max(15, 98 - (oversub - 100) * 0.25)
-    elif priority_score >= 50:  # Practising Catholic
+    elif priority_score >= 50:
         chance = max(8, 90 - (oversub - 100) * 0.6)
-    elif priority_score >= 20:  # Baptised only
+    elif priority_score >= 20:
         chance = max(3, 65 - oversub * 0.8)
     else:
         chance = max(1, 40 - oversub)
-
     return min(100, round(chance, 1))
 
-# --- Apply all filters ---
+# --- Apply Filters ---
 filtered = merged[merged["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
-
 if postcode_query:
     filtered = filtered[filtered["Postcode"].str.contains(postcode_query.strip(), case=False, na=False)]
 
 filtered = filtered.copy()
-filtered["Admission Likelihood %"] = filtered.apply(calculate_likelihood, axis=1)
-
-filtered_threshold = filtered[filtered["Oversub Ratio"] > threshold]
-
-# --- Main Results Table (the one parents love) ---
-st.subheader(f"🏫 All Catholic Schools in {selected_borough}")
-display = filtered[["School Name", "Phase", "Postcode", "PAN", "Apps Received 2025", 
-                    "Oversub Ratio", "Admission Likelihood %"]].copy()
-
-display = display.sort_values("Admission Likelihood %", ascending=False)
-
-# Colour coding
-st.dataframe(
-    display.style
-    .bar(subset=["Oversub Ratio"], color="#ff9999")
-    .bar(subset=["Admission Likelihood %"], color="#90ee90")
-    .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
-    use_container_width=True
-)
-
-# --- Highlight the really tough ones ---
-if not filtered_threshold.empty:
-    st.subheader(f"🔥 Highly Competitive Schools (>{threshold}%)")
-    tough = filtered_threshold[["School Name", "PAN", "Apps Received 2025", "Oversub Ratio", "Admission Likelihood %"]]
-    st.dataframe(
-        tough.sort_values("Oversub Ratio", ascending=False)
-        .style.bar(subset=["Oversub Ratio"], color="#ff4d4d")
-        .format({"Oversub Ratio": "{:.0f}%", "Admission Likelihood %": "{:.0f}%"}),
-        use_container_width=True
-    )
-
-# --- Top 10 Chart ---
-st.subheader("🏆 Top 10 Most Oversubscribed Catholic Schools in London (2025)")
-top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Local Authority", "Oversub Ratio"]]
-st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
-
-# --- Map ---
-st.subheader(f"🗺️ Map of Catholic Schools in {selected_borough}")
-if {"Latitude", "Longitude"}.issubset(filtered.columns):
-    map_data = filtered[["School Name", "Admission Likelihood %", "Latitude", "Longitude"]].dropna()
-    map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
-    
-    st.map(map_data, size=80, color="#d40000")
-    
-    # Optional: Show table below map
-    with st.expander("📍 See exact coordinates + your chances"):
-        st.dataframe(
-            map_data[["School Name", "Admission Likelihood %", "lat", "lon"]]
-            .sort_values("Admission Likelihood %", ascending=False)
-        )
-else:
-    st.info("No coordinates found in dataset.")
+filtered["Your Chance"] = filtered.apply(calculate_likelihood, axis=1)
 
 # --- Personal Advice ---
-st.markdown("### 🎯 Your Personal Advice")
 if sibling:
-    st.success("✅ **Strong position** — siblings nearly always get in, even at very oversubscribed schools!")
+    st.success("Siblings nearly always get in — **extremely strong position!**")
 elif baptised and church_attendance:
-    st.success("🙏 **Good position** — practising Catholic families get priority at nearly all schools.")
+    st.success("Practising Catholic family — **excellent chances**")
 elif baptised:
-    st.warning("⚠️ Baptism helps, but many schools require proof of regular practice.")
+    st.info("Baptism helps, but many schools require proof of practice")
 else:
-    st.error("❌ Most Catholic schools give very low priority to non-Catholics unless exceptional circumstances.")
+    st.warning("Non-Catholic places are very limited")
+
+# --- Results – Gorgeous Mobile Cards ---
+st.subheader(f"{len(filtered)} school{'s' if len(filtered)!=1 else ''} in {selected_borough}")
+
+for _, school in filtered.sort_values("Your Chance", ascending=False).iterrows():
+    with st.container():
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"**{school['School Name']}** • {school['Phase']}")
+            st.caption(f"{school['Postcode']} • Oversub: {school['Oversub Ratio']}%")
+            badges = []
+            if school.get("Snobe Overall Grade") and str(school["Snobe Overall Grade"]).strip():
+                badges.append(f"Snobe {school['Snobe Overall Grade']}")
+            if school.get("Ofsted Badge") and school["Ofsted Badge"] != "Awaiting":
+                badges.append(f"Ofsted {school['Ofsted Badge']}")
+            if badges:
+                st.caption(" • ".join(badges))
+        with col2:
+            chance = int(school['Your Chance'])
+            color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
+            st.markdown(
+                f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;'>{chance}%</div>",
+                unsafe_allow_html=True
+            )
+
+        # Phone & Website
+        if pd.notna(school.get("Phone")) and school["Phone"]:
+            st.markdown(f"Phone: {school['Phone']} | [Call](tel:{school['Phone']})")
+        if pd.notna(school.get("School Website")) and str(school["School Website"]).strip():
+            st.markdown(f"Website: [Visit School Website]({school['School Website']})")
+
+        st.markdown("---")
+
+# --- Map ---
+if {"Latitude", "Longitude"}.issubset(filtered.columns):
+    map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna()
+    map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
+    st.map(map_data)
 
 # --- Download ---
-st.subheader("💾 Download Your Results")
-csv = filtered.to_csv(index=False).encode('utf-8')
+csv = filtered.to_csv(index=False).encode()
 st.download_button(
-    "📥 Download this borough as CSV",
+    "Download Results + Contacts + Ofsted",
     csv,
-    f"{selected_borough.replace(' ', '_')}_Catholic_Schools_2025.csv",
+    f"{selected_borough.replace(' ', '_')}_Catholic_2025.csv",
     "text/csv"
 )
 
-st.caption("Built with ❤️ by a London parent | Data updated for 2025 admissions cycle")
+# --- Top 10 ---
+with st.expander("Top 10 Most Oversubscribed London Catholic Schools"):
+    top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
+    st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
+
+st.caption("Built with love by a London parent • 2025 admissions • Mobile-ready • Phone • Website • Ofsted • Snobe")
