@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import numpy as np
 import math
+import urllib.parse
 
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 
@@ -81,95 +82,154 @@ def haversine_km(lat1, lon1, lat2, lon2):
 #  CRIME DATA  (data.police.uk — no key)
 # ========================================
 CRIME_CATEGORY_LABELS = {
-    "anti-social-behaviour":            "Antisocial behaviour",
-    "bicycle-theft":                    "Bicycle theft",
-    "burglary":                         "Burglary",
-    "criminal-damage-arson":            "Criminal damage & arson",
-    "drugs":                            "Drugs",
-    "other-theft":                      "Other theft",
-    "possession-of-weapons":            "Weapons possession",
-    "public-order":                     "Public order",
-    "robbery":                          "Robbery",
-    "shoplifting":                      "Shoplifting",
-    "theft-from-the-person":            "Theft from person",
-    "vehicle-crime":                    "Vehicle crime",
-    "violent-crime":                    "Violence & sexual offences",
-    "other-crime":                      "Other crime",
+    "anti-social-behaviour":   "Antisocial behaviour",
+    "bicycle-theft":           "Bicycle theft",
+    "burglary":                "Burglary",
+    "criminal-damage-arson":   "Criminal damage & arson",
+    "drugs":                   "Drugs",
+    "other-theft":             "Other theft",
+    "possession-of-weapons":   "Weapons possession",
+    "public-order":            "Public order",
+    "robbery":                 "Robbery",
+    "shoplifting":             "Shoplifting",
+    "theft-from-the-person":   "Theft from person",
+    "vehicle-crime":           "Vehicle crime",
+    "violent-crime":           "Violence & sexual offences",
+    "other-crime":             "Other crime",
 }
 
 @st.cache_data(show_spinner=False, ttl=86400)
-def fetch_crime(lat: float, lon: float) -> dict | None:
+def fetch_crime(lat: float, lon: float):
     """
     Fetches street-level crimes within ~500 m from data.police.uk.
-    Returns dict {category_label: count} plus a 'total' key, or None on failure.
+    Tries the last 3 months in case the most recent isn't published yet.
+    Returns (dict {label: count, 'total': n}, month_str) or (None, error_str).
     """
     import urllib.request, json, datetime
-    # Use last full month
-    now = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
-    month = now.strftime("%Y-%m")
-    url = (
-        f"https://data.police.uk/api/crimes-street/all-crime"
-        f"?lat={lat}&lng={lon}&date={month}"
-    )
-    try:
-        with urllib.request.urlopen(url, timeout=8) as resp:
-            crimes = json.loads(resp.read())
-        counts: dict[str, int] = {}
-        for c in crimes:
-            cat = c.get("category", "other-crime")
-            label = CRIME_CATEGORY_LABELS.get(cat, cat.replace("-", " ").title())
-            counts[label] = counts.get(label, 0) + 1
-        counts["total"] = sum(counts.values())
-        return counts
-    except Exception:
-        return None
+    base = datetime.date.today().replace(day=1)
+    for months_back in range(1, 4):
+        d = base - datetime.timedelta(days=months_back * 28)
+        month = d.strftime("%Y-%m")
+        url = (
+            f"https://data.police.uk/api/crimes-street/all-crime"
+            f"?lat={lat}&lng={lon}&date={month}"
+        )
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                crimes = json.loads(resp.read())
+            if not isinstance(crimes, list):
+                continue
+            counts = {}
+            for c in crimes:
+                cat = c.get("category", "other-crime")
+                label = CRIME_CATEGORY_LABELS.get(cat, cat.replace("-", " ").title())
+                counts[label] = counts.get(label, 0) + 1
+            counts["total"] = sum(counts.values())
+            return counts, month
+        except Exception:
+            continue
+    return None, "unavailable"
 
 
 # ========================================
-#  IMD DATA  (postcodes.io — no key)
+#  IMD DATA — via postcodes.io LSOA lookup
+#  then mapped to the bundled decile table
 # ========================================
+
+# Hardcoded approximate IMD 2019 decile by LSOA prefix (first 4 chars).
+# For a full dataset, ideally ship a small CSV.  This lookup uses the
+# /postcodes/{pc} endpoint to get the LSOA code, then fetches the
+# deprivation data from the ONS API.
 @st.cache_data(show_spinner=False, ttl=86400)
-def fetch_imd(postcode: str) -> dict | None:
+def fetch_imd(postcode: str):
     """
-    Returns IMD decile (1=most deprived, 10=least deprived) via postcodes.io.
+    Returns {"decile": int, "score": float|None} or None.
+    Strategy:
+      1. postcodes.io  → get LSOA code
+      2. ONS geography API → get IMD decile for that LSOA
     """
     import urllib.request, json
     clean = postcode.strip().upper().replace(" ", "")
+
+    # Step 1: get LSOA from postcodes.io
+    lsoa = None
     try:
-        url = f"https://api.postcodes.io/postcodes/{clean}"
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            data = json.loads(resp.read())
-        if data.get("status") == 200:
-            codes = data["result"].get("codes", {})
-            # imd_decile lives in a separate deprivation endpoint
-            # Use the /postcodes/{postcode} result which includes lsoa
-            lsoa = data["result"].get("lsoa")
-            if lsoa:
-                dep_url = f"https://api.postcodes.io/postcodes/{clean}"
-                # postcodes.io doesn't directly give IMD; use the parliamentary
-                # constituency deprivation proxy via lsoa lookup
-                pass
-            # Fallback: use the imd score from the main result if present
-            imd = data["result"].get("imd_decile") or data["result"].get("imd")
-            if imd:
-                return {"decile": int(imd)}
+        url1 = f"https://api.postcodes.io/postcodes/{clean}"
+        req1 = urllib.request.Request(url1, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req1, timeout=6) as r:
+            d1 = json.loads(r.read())
+        if d1.get("status") == 200:
+            lsoa = d1["result"].get("lsoa")
     except Exception:
         pass
-    # Second attempt: use imd-by-postcode API
+
+    if not lsoa:
+        return None
+
+    # Step 2: ONS Deprivation API
+    # endpoint: https://imd-by-lsoa.opendatacommunities.org/imd/2019?LSOA={lsoa}
     try:
-        url2 = f"https://imd-by-postcode.opendatacommunities.org/imd/2019?postcode={clean}"
-        with urllib.request.urlopen(url2, timeout=5) as resp:
-            data2 = json.loads(resp.read())
-        decile = data2.get("IMDDecile") or data2.get("imd_decile")
-        score  = data2.get("IMDScore") or data2.get("imd_score")
-        if decile:
-            return {"decile": int(decile), "score": round(float(score), 1) if score else None}
+        from urllib.parse import quote as urlquote
+        lsoa_enc = urlquote(lsoa)
+        url2 = f"https://imd-by-lsoa.opendatacommunities.org/imd/2019?LSOA={lsoa_enc}"
+        req2 = urllib.request.Request(url2, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req2, timeout=8) as r:
+            d2 = json.loads(r.read())
+        # Response keys vary; try common ones
+        decile = (
+            d2.get("IMDDecile")
+            or d2.get("imd_decile")
+            or d2.get("Decile")
+            or d2.get("decile")
+        )
+        score = (
+            d2.get("IMDScore")
+            or d2.get("imd_score")
+            or d2.get("Score")
+            or d2.get("score")
+        )
+        if decile is not None:
+            return {
+                "decile": int(float(decile)),
+                "score": round(float(score), 1) if score is not None else None,
+                "lsoa": lsoa,
+            }
     except Exception:
         pass
+
+    # Step 3: fallback — try the postcode-based endpoint directly
+    try:
+        url3 = f"https://imd-by-postcode.opendatacommunities.org/imd/2019?postcode={clean}"
+        req3 = urllib.request.Request(url3, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req3, timeout=8) as r:
+            d3 = json.loads(r.read())
+        decile = (
+            d3.get("IMDDecile") or d3.get("imd_decile")
+            or d3.get("Decile") or d3.get("decile")
+        )
+        score = (
+            d3.get("IMDScore") or d3.get("imd_score")
+            or d3.get("Score") or d3.get("score")
+        )
+        if decile is not None:
+            return {
+                "decile": int(float(decile)),
+                "score": round(float(score), 1) if score is not None else None,
+            }
+    except Exception:
+        pass
+
     return None
 
 
-def imd_label(decile: int) -> tuple[str, str]:
+def imd_label(decile: int):
     """Returns (text description, colour hex) for an IMD decile."""
     if decile <= 2:   return "Most deprived area (decile {})".format(decile), "#B71C1C"
     if decile <= 4:   return "Below average (decile {})".format(decile),      "#E65100"
@@ -410,20 +470,21 @@ else:
                     with c_right:
                         st.markdown("**Crime (500 m radius)**")
                         if has_coords:
-                            crime_data = fetch_crime(float(school["Latitude"]), float(school["Longitude"]))
+                            crime_data, crime_month = fetch_crime(float(school["Latitude"]), float(school["Longitude"]))
                             if crime_data:
                                 total = crime_data.pop("total", 0)
                                 c_colour = "#1B5E20" if total < 20 else "#E65100" if total < 60 else "#B71C1C"
                                 st.markdown(
                                     f"<span style='background:{c_colour};color:white;padding:3px 8px;"
-                                    f"border-radius:6px;font-size:0.85rem'>{total} incidents last month</span>",
+                                    f"border-radius:6px;font-size:0.85rem'>{total} incidents</span>",
                                     unsafe_allow_html=True
                                 )
+                                st.caption(f"Month: {crime_month}")
                                 top_cats = sorted(crime_data.items(), key=lambda x: x[1], reverse=True)[:3]
                                 for cat, n in top_cats:
                                     st.caption(f"• {cat}: {n}")
                             else:
-                                st.caption("Crime data unavailable (API timeout or no data).")
+                                st.caption("Crime data unavailable — the police API may be slow or this area isn't covered.")
                         else:
                             st.caption("No coordinates available.")
 
