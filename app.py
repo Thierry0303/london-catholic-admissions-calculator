@@ -507,3 +507,49 @@ st.caption(
     "Built with love by a London parent • 2025 admissions data • Mobile-ready"
 )
 
+# ========================================
+#  IMD DEBUG PANEL — remove once working
+# ========================================
+st.divider()
+st.markdown("### 🔧 IMD Debug Panel")
+test_pc = st.text_input("Test postcode for IMD", value="SW1X0AA")
+if st.button("Run IMD lookup"):
+    import urllib.request, json
+    from urllib.parse import urlencode
+    st.write(f"Testing postcode: `{test_pc}`")
+
+    # Step 1
+    clean = test_pc.strip().upper().replace(" ", "")
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"https://api.postcodes.io/postcodes/{clean}", headers={"User-Agent": "Mozilla/5.0"}),
+            timeout=6
+        ) as r:
+            d = json.loads(r.read())
+        lsoa = d["result"].get("lsoa") if d.get("status") == 200 else None
+        st.success(f"✅ postcodes.io OK — LSOA: `{lsoa}`")
+    except Exception as e:
+        st.error(f"❌ postcodes.io failed: {e}")
+        lsoa = None
+
+    if lsoa:
+        # Step 2
+        params = urlencode({"where": f"lsoa11cd='{lsoa}'", "outFields": "*", "returnGeometry": "false", "f": "json"})
+        url = f"https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?{params}"
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
+                timeout=10
+            ) as r:
+                d2 = json.loads(r.read())
+            features = d2.get("features", [])
+            if features:
+                attrs = features[0]["attributes"]
+                st.success(f"✅ ArcGIS OK — {len(features)} feature(s)")
+                st.write("**All field names and values:**")
+                st.json(attrs)
+            else:
+                st.error(f"❌ ArcGIS returned 0 features")
+                st.write("Raw response:", d2)
+        except Exception as e:
+            st.error(f"❌ ArcGIS failed: {e}")
