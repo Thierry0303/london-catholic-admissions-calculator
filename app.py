@@ -163,7 +163,7 @@ def fetch_crime(lat: float, lon: float):
 #  IMD DATA — ONS Geography API (reliable)
 # ========================================
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_imd(postcode: str, _v: int = 5):
+def fetch_imd(postcode: str, _v: int = 6):
     import urllib.request, json
     from urllib.parse import urlencode
 
@@ -216,12 +216,12 @@ def fetch_imd(postcode: str, _v: int = 5):
             score = attrs.get("IMDScore") or attrs.get("IMD_Score") or attrs.get("Score")
             if decile is not None:
                 return {
-                    "decile": int(float(decile)),
+                    "decile": max(1, int(float(decile))),  # clamp to 1 minimum — 0 means most deprived
                     "score": round(float(score), 1) if score is not None else None,
                     "lsoa": lsoa,
                 }
             else:
-                return {"_debug": True, "_errors": errors, "_lsoa": lsoa, "_attrs": attrs}
+                return {"_debug": True, "_errors": errors, "_lsoa": lsoa, "_attrs": str(attrs)[:300]}
         else:
             return {"_debug": True, "_errors": errors, "_lsoa": lsoa, "_features_count": 0, "_raw": str(d2)[:300]}
     except Exception as e:
@@ -450,8 +450,8 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=5)
-                            if imd_data and "decile" in imd_data:
+                            imd_data = fetch_imd(str(school["Postcode"]), _v=6)
+                            if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
                                     f"<span style='background:{colour};color:white;padding:3px 8px;"
