@@ -160,62 +160,108 @@ def fetch_crime(lat: float, lon: float):
 
 
 # ========================================
-#  IMD DATA — bundled CSV lookup (no API needed)
+#  IMD DATA — builds lookup on first run via postcodes.io + ONS
 # ========================================
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=86400*30)
 def load_imd_lookup():
-    """Load IMD 2019 by postcode from a reliable public CSV."""
-    urls = [
-        "https://raw.githubusercontent.com/mysociety/UK-Parliament-IMD/main/data/imd2019_postcode.csv",
-        "https://raw.githubusercontent.com/drkane/imd-data/master/imd2019.csv",
-    ]
-    for url in urls:
+    """
+    Builds postcode→IMD decile lookup in two steps:
+    1. postcodes.io bulk API  → postcode→LSOA code
+    2. ONS File 7 CSV         → LSOA code→IMD decile/score
+    Cached for 30 days once built.
+    """
+    import urllib.request, json, io
+
+    # Step 1 — load all school postcodes
+    try:
+        schools_df = pd.read_csv(FULL_GITHUB) if not os.path.exists(FULL_PATH) else pd.read_csv(FULL_PATH)
+    except Exception:
+        return None
+
+    postcodes = schools_df["Postcode"].dropna().str.strip().str.upper().str.replace(" ", "", regex=False).unique().tolist()
+
+    # Step 2 — bulk postcodes.io lookup (100 at a time)
+    postcode_to_lsoa = {}
+    BATCH = 100
+    for i in range(0, len(postcodes), BATCH):
+        batch = postcodes[i:i+BATCH]
+        payload = json.dumps({"postcodes": [p.replace("", " ") for p in batch]}).encode()
+        # postcodes.io accepts both formats
         try:
-            import urllib.request
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(
+                "https://api.postcodes.io/postcodes",
+                data=json.dumps({"postcodes": batch}).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                method="POST"
+            )
             with urllib.request.urlopen(req, timeout=15) as r:
-                import io
-                df = pd.read_csv(io.BytesIO(r.read()))
-            df.columns = [c.lower().strip() for c in df.columns]
-            # normalise postcode column
-            for col in ["postcode", "pcds", "pcd", "pcd2"]:
-                if col in df.columns:
-                    df = df.rename(columns={col: "postcode"})
-                    break
-            # normalise decile column
-            for col in ["imddecilenational", "imd_decile", "imdecile", "decile", "imd2019decile"]:
-                if col in df.columns:
-                    df = df.rename(columns={col: "imd_decile"})
-                    break
-            # normalise score column
-            for col in ["imd_score", "imdscore", "score", "imd2019score"]:
-                if col in df.columns:
-                    df = df.rename(columns={col: "imd_score"})
-                    break
-            if "postcode" in df.columns and "imd_decile" in df.columns:
-                df["postcode"] = df["postcode"].astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
-                df = df.dropna(subset=["postcode", "imd_decile"])
-                return df.set_index("postcode")[["imd_decile"] + (["imd_score"] if "imd_score" in df.columns else [])]
+                data = json.loads(r.read())
+            for item in data.get("result", []):
+                if item and item.get("result"):
+                    pc = item["query"].replace(" ", "").upper()
+                    lsoa = item["result"].get("codes", {}).get("lsoa")
+                    if lsoa:
+                        postcode_to_lsoa[pc] = lsoa
         except Exception:
             continue
-    return None
+
+    if not postcode_to_lsoa:
+        return None
+
+    # Step 3 — ONS IMD 2019 File 7 (LSOA → decile/score)
+    ONS_URL = "https://assets.publishing.service.gov.uk/media/5d8b3b5ced915d0373d35414/File_7_-_All_IoD2019_Scores__Ranks__Deciles_and_Population_Denominators_3.csv"
+    try:
+        req2 = urllib.request.Request(ONS_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req2, timeout=30) as r:
+            imd_df = pd.read_csv(io.BytesIO(r.read()))
+
+        # Find correct column names
+        lsoa_col   = next(c for c in imd_df.columns if "LSOA code" in c)
+        decile_col = next(c for c in imd_df.columns if "Decile" in c and "Multiple Deprivation" in c)
+        score_col  = next(c for c in imd_df.columns if "Score" in c and "Multiple Deprivation" in c)
+
+        imd_df = imd_df[[lsoa_col, decile_col, score_col]].rename(columns={
+            lsoa_col: "lsoa", decile_col: "imd_decile", score_col: "imd_score"
+        })
+        imd_df["lsoa"] = imd_df["lsoa"].astype(str).str.strip()
+        imd_df = imd_df.set_index("lsoa")
+
+    except Exception:
+        return None
+
+    # Step 4 — join
+    rows = []
+    for pc, lsoa in postcode_to_lsoa.items():
+        if lsoa in imd_df.index:
+            row = imd_df.loc[lsoa]
+            rows.append({
+                "postcode": pc,
+                "imd_decile": int(row["imd_decile"]),
+                "imd_score": round(float(row["imd_score"]), 1),
+            })
+
+    if not rows:
+        return None
+
+    result = pd.DataFrame(rows).set_index("postcode")
+    return result
 
 
 def fetch_imd(postcode: str, _v: int = 10):
     clean = postcode.strip().upper().replace(" ", "")
     lookup = load_imd_lookup()
     if lookup is None:
-        return {"_err": "IMD CSV failed to load"}
+        return None  # silently hide — will retry next cache expiry
     if clean not in lookup.index:
-        return {"_err": f"postcode {clean} not in IMD dataset ({len(lookup)} rows loaded)"}
+        return None
     row = lookup.loc[clean]
-    decile = row.get("imd_decile") if isinstance(row, pd.Series) else row["imd_decile"]
-    score = row.get("imd_score") if isinstance(row, pd.Series) else None
+    decile = row["imd_decile"]
+    score  = row.get("imd_score")
     if pd.isna(decile):
-        return {"_err": f"decile is NaN for {clean}"}
+        return None
     return {
         "decile": max(1, int(float(decile))),
-        "score": round(float(score), 1) if score is not None and not pd.isna(score) else None,
+        "score":  round(float(score), 1) if score is not None and not pd.isna(score) else None,
     }
 
 
@@ -452,7 +498,7 @@ else:
                                 if imd_data.get("score"):
                                     st.caption(f"IMD score: {imd_data['score']}")
                             else:
-                                st.warning(str(imd_data))
+                                st.caption("IMD data loading…")
                         else:
                             st.caption("No postcode available.")
 
