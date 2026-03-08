@@ -260,8 +260,15 @@ with st.sidebar:
     boroughs = ["All boroughs"] + sorted([b for b in merged["Local Authority"].dropna().unique()])
     selected_borough = st.selectbox("Borough", boroughs)
 
-    phases = list(merged["Phase"].dropna().unique())
-    selected_phase = st.multiselect("Phase", phases, default=phases)
+    child_stage = st.radio("My child needs", ["Primary", "Secondary", "Both"], index=2)
+    primary_phases   = ["Primary", "Middle deemed primary", "All-through"]
+    secondary_phases = ["Secondary", "Middle deemed secondary", "All-through", "Not applicable"]
+    if child_stage == "Primary":
+        selected_phase = primary_phases
+    elif child_stage == "Secondary":
+        selected_phase = secondary_phases
+    else:
+        selected_phase = list(merged["Phase"].dropna().unique())
 
     st.divider()
     st.subheader("Your situation")
@@ -299,12 +306,20 @@ if not postcode_query and selected_borough != "All boroughs":
 # Phase filter
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 
-# Likelihood
+# Fix 2: Flag schools with no admissions data
 filtered = filtered.copy()
+filtered["_no_data"] = (filtered["Apps Received 2025"] == 0) & (filtered["PAN"] == 0)
+
+# Likelihood
 filtered["Your Chance"] = filtered.apply(
     lambda r: calculate_likelihood(r, baptised, church_attendance, sibling), axis=1
 )
-filtered = filtered.sort_values("Your Chance", ascending=False)
+
+# Fix 1: Sort by distance when postcode active, otherwise by chance
+if postcode_query and home_lat and "Distance (km)" in filtered.columns:
+    filtered = filtered.sort_values(["Distance (km)", "Your Chance"], ascending=[True, False])
+else:
+    filtered = filtered.sort_values("Your Chance", ascending=False)
 
 # ========================================
 #  PERSONAL ADVICE BANNER
@@ -326,8 +341,9 @@ if distance_warning:
 #  SUMMARY STATS BAR
 # ========================================
 if len(filtered) > 0:
-    avg_oversub = int(filtered["Oversub Ratio"].mean())
-    best_chance = int(filtered["Your Chance"].max())
+    data_schools = filtered[~filtered["_no_data"]]
+    avg_oversub = int(data_schools["Oversub Ratio"].mean()) if len(data_schools) else 0
+    best_chance = int(data_schools["Your Chance"].max()) if len(data_schools) else 0
     n = len(filtered)
     location_label = f"within {max_distance_km}km of {postcode_query.upper()}" if postcode_query and home_lat else selected_borough
 
@@ -371,7 +387,10 @@ else:
                 st.markdown(f"**{school['School Name']}** • {school['Phase']}")
                 dist_str = f" • 📍 {school['Distance (km)']} km away" if "Distance (km)" in school and pd.notna(school.get("Distance (km)")) else ""
                 st.caption(f"{school['Postcode']} • {school['Local Authority']}{dist_str}")
-                st.caption(f"Oversubscription: **{school['Oversub Ratio']}%** ({school['Apps Received 2025']} apps for {school['PAN']} places)")
+                if school.get("_no_data"):
+                    st.caption("⚠️ No 2025 admissions data available for this school")
+                else:
+                    st.caption(f"Oversubscription: **{school['Oversub Ratio']}%** ({school['Apps Received 2025']} apps for {school['PAN']} places)")
 
                 badges = []
                 if school.get("Snobe Overall Grade") and str(school["Snobe Overall Grade"]).strip():
@@ -382,13 +401,20 @@ else:
                     st.caption(" • ".join(badges))
 
             with col2:
-                chance = int(school['Your Chance'])
-                color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
-                st.markdown(
-                    f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.3rem'>{chance}%</div>",
-                    unsafe_allow_html=True
-                )
-                st.caption("your chance")
+                if school.get("_no_data"):
+                    st.markdown(
+                        "<div style='background:#9E9E9E;color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:0.9rem'>No data</div>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption("no admissions data")
+                else:
+                    chance = int(school['Your Chance'])
+                    color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
+                    st.markdown(
+                        f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.3rem'>{chance}%</div>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption("your chance")
 
             # How calculated
             with st.expander("How is this calculated?"):
