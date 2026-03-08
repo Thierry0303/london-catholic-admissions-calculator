@@ -198,7 +198,7 @@ def fetch_imd(postcode: str):
     # Step 2 — ONS ArcGIS FeatureServer (IMD 2019)
     params = urlencode({
         "where": f"lsoa11cd='{lsoa}'",
-        "outFields": "lsoa11cd,IMDScore,IMDRank,IMDDecil",
+        "outFields": "lsoa11cd,IMDScore,IMD_Rank,IMD_Decile",
         "returnGeometry": "false",
         "f": "json",
     })
@@ -213,7 +213,8 @@ def fetch_imd(postcode: str):
         features = d2.get("features", [])
         if features:
             attrs = features[0].get("attributes", {})
-            decile = attrs.get("IMDDecil")
+            # Field is IMD_Decile (with underscore)
+            decile = attrs.get("IMD_Decile")
             score  = attrs.get("IMDScore")
             if decile is not None:
                 return {
