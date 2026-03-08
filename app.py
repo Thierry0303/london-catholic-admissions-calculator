@@ -384,7 +384,10 @@ else:
         with st.container():
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.markdown(f"**{school['School Name']}** • {school['Phase']}")
+                website = school.get("School Website")
+                has_website = pd.notna(website) and str(website).strip() not in ("", "nan")
+                name_str = f"[{school['School Name']}]({website})" if has_website else f"**{school['School Name']}**"
+                st.markdown(f"{name_str} • {school['Phase']}")
                 dist_str = f" • 📍 {school['Distance (km)']} km away" if "Distance (km)" in school and pd.notna(school.get("Distance (km)")) else ""
                 st.caption(f"{school['Postcode']} • {school['Local Authority']}{dist_str}")
                 if school.get("_no_data"):
@@ -408,13 +411,21 @@ else:
                     )
                     st.caption("no admissions data")
                 else:
-                    chance = int(school['Your Chance'])
-                    color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
-                    st.markdown(
-                        f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.3rem'>{chance}%</div>",
-                        unsafe_allow_html=True
-                    )
-                    st.caption("your chance")
+                    if school['Oversub Ratio'] < 100:
+                        st.markdown(
+                            "<div style='background:#1565C0;color:white;padding:10px;border-radius:10px;"
+                            "text-align:center;font-weight:bold;font-size:0.95rem'>Low<br>demand</div>",
+                            unsafe_allow_html=True
+                        )
+                        st.caption(f"{school['Apps Received 2025']} apps for {school['PAN']} places in 2025")
+                    else:
+                        chance = int(school['Your Chance'])
+                        color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
+                        st.markdown(
+                            f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.3rem'>{chance}%</div>",
+                            unsafe_allow_html=True
+                        )
+                        st.caption("your chance")
 
             # How calculated
             with st.expander("How is this calculated?"):
@@ -465,7 +476,8 @@ else:
                                     f"border-radius:6px;font-size:0.85rem'>{total} incidents</span>",
                                     unsafe_allow_html=True
                                 )
-                                st.caption(f"Month: {crime_month}")
+                                london_context = "low" if total < 20 else "typical for inner London" if total < 60 else "high"
+                                st.caption(f"Month: {crime_month}  •  Context: {london_context}")
                                 top_cats = sorted(crime_data.items(), key=lambda x: x[1], reverse=True)[:3]
                                 for cat, n in top_cats:
                                     st.caption(f"• {cat}: {n}")
@@ -475,9 +487,7 @@ else:
                             st.caption("No coordinates available.")
 
             if pd.notna(school.get("Phone")) and school["Phone"]:
-                st.markdown(f"📞 {school['Phone']} | [Call](tel:{school['Phone']})")
-            if pd.notna(school.get("School Website")) and str(school["School Website"]).strip():
-                st.markdown(f"🌐 [Visit School Website]({school['School Website']})")
+                st.caption(f"📞 {school['Phone']}")
 
             st.markdown("---")
 
