@@ -162,71 +162,48 @@ def fetch_crime(lat: float, lon: float):
 # ========================================
 #  IMD DATA — ONS Geography API (reliable)
 # ========================================
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_imd(postcode: str, _v: int = 7):
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_imd(postcode: str, _v: int = 8):
     import urllib.request, json
     from urllib.parse import urlencode
 
     clean = postcode.strip().upper().replace(" ", "")
-    errors = []
 
-    # Step 1 — LSOA from postcodes.io
-    lsoa = None
+    # Step 1 — get LSOA
     try:
-        req = urllib.request.Request(
-            f"https://api.postcodes.io/postcodes/{clean}",
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urllib.request.urlopen(req, timeout=6) as r:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"https://api.postcodes.io/postcodes/{clean}", headers={"User-Agent": "Mozilla/5.0"}),
+            timeout=6
+        ) as r:
             d = json.loads(r.read())
-        if d.get("status") == 200:
-            lsoa = d["result"].get("lsoa")
-        else:
-            errors.append(f"postcodes.io status={d.get('status')}")
+        lsoa = d["result"]["lsoa"] if d.get("status") == 200 else None
     except Exception as e:
-        errors.append(f"postcodes.io exception: {e}")
+        return {"_err": f"postcodes.io failed: {e}"}
 
     if not lsoa:
-        return {"_debug": True, "_errors": errors, "_lsoa": None}
+        return {"_err": f"no LSOA for {clean}"}
 
-    # Step 2 — ONS ArcGIS
-    params = urlencode({
-        "where": f"lsoa11cd='{lsoa}'",
-        "outFields": "*",
-        "returnGeometry": "false",
-        "f": "json",
-    })
-    url = (
-        "https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/"
-        "Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?" + params
-    )
+    # Step 2 — ONS ArcGIS IMD 2019
+    params = urlencode({"where": f"lsoa11cd='{lsoa}'", "outFields": "*", "returnGeometry": "false", "f": "json"})
+    url = f"https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?{params}"
     try:
-        req2 = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req2, timeout=10) as r:
-            raw = r.read()
-            d2 = json.loads(raw)
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
+            timeout=10
+        ) as r:
+            d2 = json.loads(r.read())
         features = d2.get("features", [])
-        if features:
-            attrs = features[0].get("attributes", {})
-            decile = (
-                attrs.get("IMD_Decile") or attrs.get("IMDDecile") or
-                attrs.get("IMD_Decil") or attrs.get("imd_decile") or
-                attrs.get("Decile")
-            )
-            score = attrs.get("IMDScore") or attrs.get("IMD_Score") or attrs.get("Score")
-            if decile is not None:
-                return {
-                    "decile": max(1, int(float(decile))),  # clamp to 1 minimum — 0 means most deprived
-                    "score": round(float(score), 1) if score is not None else None,
-                    "lsoa": lsoa,
-                }
-            else:
-                return {"_debug": True, "_errors": errors, "_lsoa": lsoa, "_attrs": str(attrs)[:300]}
-        else:
-            return {"_debug": True, "_errors": errors, "_lsoa": lsoa, "_features_count": 0, "_raw": str(d2)[:300]}
+        if not features:
+            return {"_err": f"no features for lsoa={lsoa}", "_raw": str(d2)[:500]}
+        attrs = features[0]["attributes"]
+        # Return raw attrs so we can see ALL field names
+        decile = attrs.get("IMDDecile10") or attrs.get("IMD_Decile") or attrs.get("IMDDecile") or attrs.get("Decile") or attrs.get("IMDDec0")
+        score  = attrs.get("IMDScore")   or attrs.get("IMD_Score")  or attrs.get("Score")
+        if decile is not None:
+            return {"decile": max(1, int(float(decile))), "score": round(float(score), 1) if score else None, "lsoa": lsoa}
+        return {"_err": "decile field not found", "_fields": list(attrs.keys()), "_sample": {k: attrs[k] for k in list(attrs.keys())[:8]}}
     except Exception as e:
-        errors.append(f"arcgis exception: {e}")
-        return {"_debug": True, "_errors": errors, "_lsoa": lsoa}
+        return {"_err": f"arcgis failed: {e}", "_lsoa": lsoa}
 
 
 def imd_label(decile: int):
@@ -450,7 +427,7 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=7)
+                            imd_data = fetch_imd(str(school["Postcode"]), _v=8)
                             if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
@@ -462,10 +439,7 @@ else:
                                 if imd_data.get("score"):
                                     st.caption(f"IMD score: {imd_data['score']}")
                             else:
-                                if imd_data:
-                                    st.warning(f"DEBUG lsoa={imd_data.get('_lsoa')} errors={imd_data.get('_errors')} attrs={imd_data.get('_attrs')} raw={imd_data.get('_raw')}")
-                                else:
-                                    st.warning("DEBUG: fetch_imd returned None")
+                                st.warning(str(imd_data))
                         else:
                             st.caption("No postcode available.")
 
@@ -532,3 +506,4 @@ st.caption(
     "[data.police.uk](https://data.police.uk). Reflects the surrounding area, not the school itself.\n\n"
     "Built with love by a London parent • 2025 admissions data • Mobile-ready"
 )
+
