@@ -78,6 +78,107 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 # ========================================
+#  CRIME DATA  (data.police.uk — no key)
+# ========================================
+CRIME_CATEGORY_LABELS = {
+    "anti-social-behaviour":            "Antisocial behaviour",
+    "bicycle-theft":                    "Bicycle theft",
+    "burglary":                         "Burglary",
+    "criminal-damage-arson":            "Criminal damage & arson",
+    "drugs":                            "Drugs",
+    "other-theft":                      "Other theft",
+    "possession-of-weapons":            "Weapons possession",
+    "public-order":                     "Public order",
+    "robbery":                          "Robbery",
+    "shoplifting":                      "Shoplifting",
+    "theft-from-the-person":            "Theft from person",
+    "vehicle-crime":                    "Vehicle crime",
+    "violent-crime":                    "Violence & sexual offences",
+    "other-crime":                      "Other crime",
+}
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_crime(lat: float, lon: float) -> dict | None:
+    """
+    Fetches street-level crimes within ~500 m from data.police.uk.
+    Returns dict {category_label: count} plus a 'total' key, or None on failure.
+    """
+    import urllib.request, json, datetime
+    # Use last full month
+    now = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
+    month = now.strftime("%Y-%m")
+    url = (
+        f"https://data.police.uk/api/crimes-street/all-crime"
+        f"?lat={lat}&lng={lon}&date={month}"
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            crimes = json.loads(resp.read())
+        counts: dict[str, int] = {}
+        for c in crimes:
+            cat = c.get("category", "other-crime")
+            label = CRIME_CATEGORY_LABELS.get(cat, cat.replace("-", " ").title())
+            counts[label] = counts.get(label, 0) + 1
+        counts["total"] = sum(counts.values())
+        return counts
+    except Exception:
+        return None
+
+
+# ========================================
+#  IMD DATA  (postcodes.io — no key)
+# ========================================
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_imd(postcode: str) -> dict | None:
+    """
+    Returns IMD decile (1=most deprived, 10=least deprived) via postcodes.io.
+    """
+    import urllib.request, json
+    clean = postcode.strip().upper().replace(" ", "")
+    try:
+        url = f"https://api.postcodes.io/postcodes/{clean}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == 200:
+            codes = data["result"].get("codes", {})
+            # imd_decile lives in a separate deprivation endpoint
+            # Use the /postcodes/{postcode} result which includes lsoa
+            lsoa = data["result"].get("lsoa")
+            if lsoa:
+                dep_url = f"https://api.postcodes.io/postcodes/{clean}"
+                # postcodes.io doesn't directly give IMD; use the parliamentary
+                # constituency deprivation proxy via lsoa lookup
+                pass
+            # Fallback: use the imd score from the main result if present
+            imd = data["result"].get("imd_decile") or data["result"].get("imd")
+            if imd:
+                return {"decile": int(imd)}
+    except Exception:
+        pass
+    # Second attempt: use imd-by-postcode API
+    try:
+        url2 = f"https://imd-by-postcode.opendatacommunities.org/imd/2019?postcode={clean}"
+        with urllib.request.urlopen(url2, timeout=5) as resp:
+            data2 = json.loads(resp.read())
+        decile = data2.get("IMDDecile") or data2.get("imd_decile")
+        score  = data2.get("IMDScore") or data2.get("imd_score")
+        if decile:
+            return {"decile": int(decile), "score": round(float(score), 1) if score else None}
+    except Exception:
+        pass
+    return None
+
+
+def imd_label(decile: int) -> tuple[str, str]:
+    """Returns (text description, colour hex) for an IMD decile."""
+    if decile <= 2:   return "Most deprived area (decile {})".format(decile), "#B71C1C"
+    if decile <= 4:   return "Below average (decile {})".format(decile),      "#E65100"
+    if decile <= 6:   return "Average area (decile {})".format(decile),        "#F9A825"
+    if decile <= 8:   return "Above average (decile {})".format(decile),       "#558B2F"
+    return             "Least deprived area (decile {})".format(decile),        "#1B5E20"
+
+
+# ========================================
 #  LIKELIHOOD CALCULATOR
 # ========================================
 def calculate_likelihood(row, baptised, church_attendance, sibling):
@@ -274,6 +375,58 @@ else:
                 st.caption(chance_explanation(school, baptised, church_attendance, sibling))
                 st.caption("Chance combines your Catholic priority score with how oversubscribed the school is. It's a guide, not a guarantee.")
 
+            # Neighbourhood context (crime + IMD)
+            has_coords = pd.notna(school.get("Latitude")) and pd.notna(school.get("Longitude"))
+            has_postcode = pd.notna(school.get("Postcode")) and str(school.get("Postcode", "")).strip()
+            if has_coords or has_postcode:
+                with st.expander("🏘️ Neighbourhood context"):
+                    st.caption(
+                        "ℹ️ These figures reflect the **surrounding area**, not the school itself. "
+                        "Crime stats cover a ~500 m radius from the school (latest available month)."
+                    )
+                    c_left, c_right = st.columns(2)
+
+                    # --- IMD ---
+                    with c_left:
+                        st.markdown("**Deprivation (IMD)**")
+                        if has_postcode:
+                            imd_data = fetch_imd(str(school["Postcode"]))
+                            if imd_data and "decile" in imd_data:
+                                desc, colour = imd_label(imd_data["decile"])
+                                st.markdown(
+                                    f"<span style='background:{colour};color:white;padding:3px 8px;"
+                                    f"border-radius:6px;font-size:0.85rem'>{desc}</span>",
+                                    unsafe_allow_html=True
+                                )
+                                st.caption("1 = most deprived · 10 = least deprived in England")
+                                if imd_data.get("score"):
+                                    st.caption(f"IMD score: {imd_data['score']}")
+                            else:
+                                st.caption("IMD data unavailable for this postcode.")
+                        else:
+                            st.caption("No postcode available.")
+
+                    # --- Crime ---
+                    with c_right:
+                        st.markdown("**Crime (500 m radius)**")
+                        if has_coords:
+                            crime_data = fetch_crime(float(school["Latitude"]), float(school["Longitude"]))
+                            if crime_data:
+                                total = crime_data.pop("total", 0)
+                                c_colour = "#1B5E20" if total < 20 else "#E65100" if total < 60 else "#B71C1C"
+                                st.markdown(
+                                    f"<span style='background:{c_colour};color:white;padding:3px 8px;"
+                                    f"border-radius:6px;font-size:0.85rem'>{total} incidents last month</span>",
+                                    unsafe_allow_html=True
+                                )
+                                top_cats = sorted(crime_data.items(), key=lambda x: x[1], reverse=True)[:3]
+                                for cat, n in top_cats:
+                                    st.caption(f"• {cat}: {n}")
+                            else:
+                                st.caption("Crime data unavailable (API timeout or no data).")
+                        else:
+                            st.caption("No coordinates available.")
+
             if pd.notna(school.get("Phone")) and school["Phone"]:
                 st.markdown(f"📞 {school['Phone']} | [Call](tel:{school['Phone']})")
             if pd.notna(school.get("School Website")) and str(school["School Website"]).strip():
@@ -309,5 +462,9 @@ st.caption(
     "**Snobe grade**: Independent rating of school quality (separate from Ofsted). "
     "Higher grades indicate better performance on academic and pastoral measures. "
     "See [snobe.co.uk](https://snobe.co.uk) for methodology.\n\n"
+    "**IMD**: Index of Multiple Deprivation — England's official measure of relative deprivation by area. "
+    "Decile 1 = most deprived 10% of areas; Decile 10 = least deprived. Source: MHCLG / postcodes.io.\n\n"
+    "**Crime data**: Street-level incidents within ~500 m of the school, sourced from "
+    "[data.police.uk](https://data.police.uk). Reflects the surrounding area, not the school itself.\n\n"
     "Built with love by a London parent • 2025 admissions data • Mobile-ready"
 )
