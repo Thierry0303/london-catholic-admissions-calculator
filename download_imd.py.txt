@@ -1,0 +1,77 @@
+"""
+Run this once locally to generate imd2019_postcode.csv for the repo.
+
+    python download_imd.py
+
+Downloads the ONS postcode-level IMD 2019 data (~3 MB) and saves a
+trimmed version with just the columns the app needs.
+
+Source:
+  https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019
+  File: File 7: all ranks, deciles and scores for the indices of deprivation,
+        and population denominators (CSV, ~25 MB)
+  We also use the ONS postcode → LSOA lookup to map postcodes to IMD deciles.
+
+Much easier: use the pre-joined dataset from the House of Commons Library
+  https://researchbriefings.files.parliament.uk/documents/CBP-7973/imd2019_postcode.csv
+  (This is ~3 MB and contains postcode, imd_decile, imd_score directly.)
+"""
+
+import urllib.request
+import pandas as pd
+import io
+import sys
+
+OUTPUT = "imd2019_postcode.csv"
+
+# House of Commons Library pre-joined postcode IMD CSV
+# Direct link (public domain)
+URL = "https://researchbriefings.files.parliament.uk/documents/CBP-7973/imd2019_postcode.csv"
+
+print(f"Downloading IMD data from:\n  {URL}\n")
+try:
+    req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw = resp.read()
+    print(f"Downloaded {len(raw)/1_000_000:.1f} MB")
+except Exception as e:
+    print(f"Download failed: {e}")
+    print("\nAlternative: download manually from:")
+    print("  https://researchbriefings.files.parliament.uk/documents/CBP-7973/imd2019_postcode.csv")
+    print("and save as imd2019_postcode.csv in your repo root.")
+    sys.exit(1)
+
+df = pd.read_csv(io.BytesIO(raw))
+print(f"Columns: {list(df.columns)}")
+
+# Normalise column names to what the app expects
+col_map = {}
+for c in df.columns:
+    cl = c.lower().strip()
+    if cl in ("pcds", "postcode", "pcd", "pcd2"):
+        col_map[c] = "postcode"
+    elif "decile" in cl and "imd" in cl:
+        col_map[c] = "imd_decile"
+    elif "score" in cl and "imd" in cl:
+        col_map[c] = "imd_score"
+    elif cl == "decile":
+        col_map[c] = "imd_decile"
+    elif cl == "score":
+        col_map[c] = "imd_score"
+
+df = df.rename(columns=col_map)
+
+needed = [c for c in ["postcode", "imd_decile", "imd_score"] if c in df.columns]
+if "postcode" not in needed:
+    print("ERROR: Could not find postcode column. Columns available:", list(df.columns))
+    sys.exit(1)
+
+df = df[needed].copy()
+df["postcode"] = df["postcode"].astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
+df = df.dropna(subset=["postcode", "imd_decile"])
+df["imd_decile"] = df["imd_decile"].astype(int)
+
+df.to_csv(OUTPUT, index=False)
+print(f"\nSaved {len(df):,} postcodes → {OUTPUT}  ({len(df.to_csv(index=False).encode())/1_000_000:.1f} MB)")
+print("\nNow commit imd2019_postcode.csv to your GitHub repo.")
+print("The app will load it automatically on next deploy.")
