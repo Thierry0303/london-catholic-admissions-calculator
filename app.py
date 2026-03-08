@@ -167,11 +167,9 @@ def fetch_imd(postcode: str):
     """
     Returns {"decile": int, "score": float|None, "lsoa": str} or None.
 
-    Strategy:
-      1. postcodes.io → get LSOA code
-      2. ONS Geography API → get IMD 2019 decile for that LSOA
-         https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/
-         Indices_of_Multiple_Deprivation_(IMD)_2019/FeatureServer/0/query
+    Step 1: postcodes.io → LSOA code
+    Step 2: ONS ArcGIS → IMD decile using outFields=* to avoid field name guessing
+    Tries multiple known ONS service URLs.
     """
     import urllib.request, json
     from urllib.parse import urlencode
@@ -195,35 +193,57 @@ def fetch_imd(postcode: str):
     if not lsoa:
         return None
 
-    # Step 2 — ONS ArcGIS FeatureServer (IMD 2019)
-    params = urlencode({
-        "where": f"lsoa11cd='{lsoa}'",
-        "outFields": "lsoa11cd,IMDScore,IMD_Rank,IMD_Decile",
-        "returnGeometry": "false",
-        "f": "json",
-    })
-    url = (
-        "https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/"
-        "Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?" + params
-    )
-    try:
-        req2 = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req2, timeout=10) as r:
-            d2 = json.loads(r.read())
-        features = d2.get("features", [])
-        if features:
+    # Step 2 — try multiple ONS IMD service URLs
+    service_urls = [
+        # ONS Open Geography Portal — IMD 2019
+        "https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query",
+        # Alternative ONS hosted service
+        "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/Index_of_Multiple_Deprivation_December_2019/FeatureServer/0/query",
+    ]
+
+    for base_url in service_urls:
+        params = urlencode({
+            "where": f"lsoa11cd='{lsoa}'",
+            "outFields": "*",
+            "returnGeometry": "false",
+            "f": "json",
+        })
+        try:
+            req2 = urllib.request.Request(
+                f"{base_url}?{params}",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req2, timeout=10) as r:
+                d2 = json.loads(r.read())
+
+            features = d2.get("features", [])
+            if not features:
+                continue
+
             attrs = features[0].get("attributes", {})
-            # Field is IMD_Decile (with underscore)
-            decile = attrs.get("IMD_Decile")
-            score  = attrs.get("IMDScore")
+
+            # Try every plausible field name variant for decile and score
+            decile = (
+                attrs.get("IMD_Decile") or attrs.get("IMDDecile") or
+                attrs.get("IMD_Decil") or attrs.get("IMDDecil") or
+                attrs.get("imd_decile") or attrs.get("Decile") or
+                attrs.get("imdDecile") or attrs.get("IMD2019Decile")
+            )
+            score = (
+                attrs.get("IMDScore") or attrs.get("IMD_Score") or
+                attrs.get("imd_score") or attrs.get("Score") or
+                attrs.get("IMD2019Score")
+            )
+
             if decile is not None:
                 return {
-                    "decile": int(decile),
+                    "decile": int(float(decile)),
                     "score": round(float(score), 1) if score is not None else None,
                     "lsoa": lsoa,
+                    "_raw_fields": list(attrs.keys()),  # for debugging
                 }
-    except Exception:
-        pass
+        except Exception:
+            continue
 
     return None
 
@@ -462,6 +482,13 @@ else:
                                     st.caption(f"IMD score: {imd_data['score']}")
                             else:
                                 st.caption("IMD data unavailable for this postcode.")
+                                # DEBUG — remove once working
+                                if imd_data is not None:
+                                    st.caption(f"🔍 Debug: got data but no decile. Keys: {list(imd_data.keys())}")
+                                    if "_raw_fields" in imd_data:
+                                        st.caption(f"🔍 API fields returned: {imd_data['_raw_fields']}")
+                                else:
+                                    st.caption(f"🔍 Debug: fetch_imd returned None for {school['Postcode']}")
                         else:
                             st.caption("No postcode available.")
 
