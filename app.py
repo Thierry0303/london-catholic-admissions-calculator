@@ -396,6 +396,8 @@ else:
                     st.caption(f"Oversubscription: **{school['Oversub Ratio']}%** ({school['Apps Received 2025']} apps for {school['PAN']} places)")
 
                 badges = []
+                if school.get("Phase") == "Not applicable":
+                    badges.append("🏫 Independent (fee-paying)")
                 if school.get("Snobe Overall Grade") and str(school["Snobe Overall Grade"]).strip():
                     badges.append(f"Snobe {school['Snobe Overall Grade']} ℹ️")
                 if school.get("Ofsted Badge") and school["Ofsted Badge"] != "Awaiting":
