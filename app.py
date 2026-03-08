@@ -160,56 +160,63 @@ def fetch_crime(lat: float, lon: float):
 
 
 # ========================================
-#  IMD DATA — ONS Geography API (reliable)
+#  IMD DATA — bundled CSV lookup (no API needed)
 # ========================================
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False)
+def load_imd_lookup():
+    """Load IMD 2019 by postcode from a reliable public CSV."""
+    urls = [
+        "https://raw.githubusercontent.com/mysociety/UK-Parliament-IMD/main/data/imd2019_postcode.csv",
+        "https://raw.githubusercontent.com/drkane/imd-data/master/imd2019.csv",
+    ]
+    for url in urls:
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                import io
+                df = pd.read_csv(io.BytesIO(r.read()))
+            df.columns = [c.lower().strip() for c in df.columns]
+            # normalise postcode column
+            for col in ["postcode", "pcds", "pcd", "pcd2"]:
+                if col in df.columns:
+                    df = df.rename(columns={col: "postcode"})
+                    break
+            # normalise decile column
+            for col in ["imddecilenational", "imd_decile", "imdecile", "decile", "imd2019decile"]:
+                if col in df.columns:
+                    df = df.rename(columns={col: "imd_decile"})
+                    break
+            # normalise score column
+            for col in ["imd_score", "imdscore", "score", "imd2019score"]:
+                if col in df.columns:
+                    df = df.rename(columns={col: "imd_score"})
+                    break
+            if "postcode" in df.columns and "imd_decile" in df.columns:
+                df["postcode"] = df["postcode"].astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
+                df = df.dropna(subset=["postcode", "imd_decile"])
+                return df.set_index("postcode")[["imd_decile"] + (["imd_score"] if "imd_score" in df.columns else [])]
+        except Exception:
+            continue
+    return None
+
+
 def fetch_imd(postcode: str, _v: int = 10):
-    import urllib.request, json
-    from urllib.parse import urlencode
-
     clean = postcode.strip().upper().replace(" ", "")
-
-    # Step 1 — get LSOA CODE (not name) from postcodes.io
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(f"https://api.postcodes.io/postcodes/{clean}", headers={"User-Agent": "Mozilla/5.0"}),
-            timeout=6
-        ) as r:
-            d = json.loads(r.read())
-        if d.get("status") == 200:
-            # 'codes' contains the actual ONS code e.g. E01003781
-            lsoa = d["result"].get("codes", {}).get("lsoa") or d["result"].get("lsoa")
-        else:
-            lsoa = None
-    except Exception as e:
-        return {"_err": f"postcodes.io failed: {e}"}
-
-    if not lsoa:
-        return {"_err": f"no LSOA for {clean}"}
-
-    # Step 2 — ONS ArcGIS IMD 2019 — use lsoa11cd with the E-code
-    from urllib.parse import quote
-    where = f"lsoa11cd='{lsoa}'"
-    params = f"where={quote(where)}&outFields=*&returnGeometry=false&f=json"
-    url = f"https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?{params}"
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
-            timeout=10
-        ) as r:
-            d2 = json.loads(r.read())
-        features = d2.get("features", [])
-        if not features:
-            return {"_err": f"no features for lsoa={lsoa}", "_raw": str(d2)[:500]}
-        attrs = features[0]["attributes"]
-        # Return raw attrs so we can see ALL field names
-        decile = attrs.get("IMDDecile10") or attrs.get("IMD_Decile") or attrs.get("IMDDecile") or attrs.get("Decile") or attrs.get("IMDDec0")
-        score  = attrs.get("IMDScore")   or attrs.get("IMD_Score")  or attrs.get("Score")
-        if decile is not None:
-            return {"decile": max(1, int(float(decile))), "score": round(float(score), 1) if score else None, "lsoa": lsoa}
-        return {"_err": "decile field not found", "_fields": list(attrs.keys()), "_sample": {k: attrs[k] for k in list(attrs.keys())[:8]}}
-    except Exception as e:
-        return {"_err": f"arcgis failed: {e}", "_lsoa": lsoa}
+    lookup = load_imd_lookup()
+    if lookup is None:
+        return {"_err": "IMD CSV failed to load"}
+    if clean not in lookup.index:
+        return {"_err": f"postcode {clean} not in IMD dataset ({len(lookup)} rows loaded)"}
+    row = lookup.loc[clean]
+    decile = row.get("imd_decile") if isinstance(row, pd.Series) else row["imd_decile"]
+    score = row.get("imd_score") if isinstance(row, pd.Series) else None
+    if pd.isna(decile):
+        return {"_err": f"decile is NaN for {clean}"}
+    return {
+        "decile": max(1, int(float(decile))),
+        "score": round(float(score), 1) if score is not None and not pd.isna(score) else None,
+    }
 
 
 def imd_label(decile: int):
