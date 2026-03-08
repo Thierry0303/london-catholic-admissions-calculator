@@ -160,109 +160,33 @@ def fetch_crime(lat: float, lon: float):
 
 
 # ========================================
-#  IMD DATA — builds lookup on first run via postcodes.io + ONS
+#  IMD DATA — static CSV committed to repo
 # ========================================
-@st.cache_data(show_spinner=False, ttl=86400*30)
+@st.cache_data(show_spinner=False)
 def load_imd_lookup():
-    """
-    Builds postcode→IMD decile lookup in two steps:
-    1. postcodes.io bulk API  → postcode→LSOA code
-    2. ONS File 7 CSV         → LSOA code→IMD decile/score
-    Cached for 30 days once built.
-    """
-    import urllib.request, json, io
-
-    # Step 1 — load all school postcodes
-    try:
-        schools_df = pd.read_csv(FULL_GITHUB) if not os.path.exists(FULL_PATH) else pd.read_csv(FULL_PATH)
-    except Exception:
-        return None
-
-    postcodes = schools_df["Postcode"].dropna().str.strip().str.upper().str.replace(" ", "", regex=False).unique().tolist()
-
-    # Step 2 — bulk postcodes.io lookup (100 at a time)
-    postcode_to_lsoa = {}
-    BATCH = 100
-    for i in range(0, len(postcodes), BATCH):
-        batch = postcodes[i:i+BATCH]
-        payload = json.dumps({"postcodes": [p.replace("", " ") for p in batch]}).encode()
-        # postcodes.io accepts both formats
+    for path in [
+        "imd_lookup.csv",
+        "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/imd_lookup.csv",
+    ]:
         try:
-            req = urllib.request.Request(
-                "https://api.postcodes.io/postcodes",
-                data=json.dumps({"postcodes": batch}).encode(),
-                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=15) as r:
-                data = json.loads(r.read())
-            for item in data.get("result", []):
-                if item and item.get("result"):
-                    pc = item["query"].replace(" ", "").upper()
-                    lsoa = item["result"].get("codes", {}).get("lsoa")
-                    if lsoa:
-                        postcode_to_lsoa[pc] = lsoa
+            df = pd.read_csv(path)
+            df["postcode"] = df["postcode"].astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
+            return df.set_index("postcode")
         except Exception:
             continue
-
-    if not postcode_to_lsoa:
-        return None
-
-    # Step 3 — ONS IMD 2019 File 7 (LSOA → decile/score)
-    ONS_URL = "https://assets.publishing.service.gov.uk/media/5d8b3b5ced915d0373d35414/File_7_-_All_IoD2019_Scores__Ranks__Deciles_and_Population_Denominators_3.csv"
-    try:
-        req2 = urllib.request.Request(ONS_URL, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req2, timeout=30) as r:
-            imd_df = pd.read_csv(io.BytesIO(r.read()))
-
-        # Find correct column names
-        lsoa_col   = next(c for c in imd_df.columns if "LSOA code" in c)
-        decile_col = next(c for c in imd_df.columns if "Decile" in c and "Multiple Deprivation" in c)
-        score_col  = next(c for c in imd_df.columns if "Score" in c and "Multiple Deprivation" in c)
-
-        imd_df = imd_df[[lsoa_col, decile_col, score_col]].rename(columns={
-            lsoa_col: "lsoa", decile_col: "imd_decile", score_col: "imd_score"
-        })
-        imd_df["lsoa"] = imd_df["lsoa"].astype(str).str.strip()
-        imd_df = imd_df.set_index("lsoa")
-
-    except Exception:
-        return None
-
-    # Step 4 — join
-    rows = []
-    for pc, lsoa in postcode_to_lsoa.items():
-        if lsoa in imd_df.index:
-            row = imd_df.loc[lsoa]
-            rows.append({
-                "postcode": pc,
-                "imd_decile": int(row["imd_decile"]),
-                "imd_score": round(float(row["imd_score"]), 1),
-            })
-
-    if not rows:
-        return None
-
-    result = pd.DataFrame(rows).set_index("postcode")
-    return result
+    return None
 
 
-def fetch_imd(postcode: str, _v: int = 10):
+def fetch_imd(postcode: str):
     clean = postcode.strip().upper().replace(" ", "")
     lookup = load_imd_lookup()
-    if lookup is None:
-        return None  # silently hide — will retry next cache expiry
-    if clean not in lookup.index:
+    if lookup is None or clean not in lookup.index:
         return None
     row = lookup.loc[clean]
     decile = row["imd_decile"]
-    score  = row.get("imd_score")
     if pd.isna(decile):
         return None
-    return {
-        "decile": max(1, int(float(decile))),
-        "score":  round(float(score), 1) if score is not None and not pd.isna(score) else None,
-    }
+    return {"decile": max(1, int(float(decile)))}
 
 
 def imd_label(decile: int):
@@ -486,7 +410,7 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=10)
+                            imd_data = fetch_imd(str(school["Postcode"]))
                             if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
@@ -567,48 +491,4 @@ st.caption(
 )
 
 # ========================================
-#  IMD DEBUG PANEL — remove once working
-# ========================================
-st.divider()
-st.markdown("### 🔧 IMD Debug Panel")
-test_pc = st.text_input("Test postcode for IMD", value="SW1X0AA")
-if st.button("Run IMD lookup"):
-    import urllib.request, json
-    from urllib.parse import urlencode
-    st.write(f"Testing postcode: `{test_pc}`")
 
-    # Step 1
-    clean = test_pc.strip().upper().replace(" ", "")
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(f"https://api.postcodes.io/postcodes/{clean}", headers={"User-Agent": "Mozilla/5.0"}),
-            timeout=6
-        ) as r:
-            d = json.loads(r.read())
-        lsoa = d["result"].get("lsoa") if d.get("status") == 200 else None
-        st.success(f"✅ postcodes.io OK — LSOA: `{lsoa}`")
-    except Exception as e:
-        st.error(f"❌ postcodes.io failed: {e}")
-        lsoa = None
-
-    if lsoa:
-        # Step 2
-        params = urlencode({"where": f"lsoa11cd='{lsoa}'", "outFields": "*", "returnGeometry": "false", "f": "json"})
-        url = f"https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?{params}"
-        try:
-            with urllib.request.urlopen(
-                urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
-                timeout=10
-            ) as r:
-                d2 = json.loads(r.read())
-            features = d2.get("features", [])
-            if features:
-                attrs = features[0]["attributes"]
-                st.success(f"✅ ArcGIS OK — {len(features)} feature(s)")
-                st.write("**All field names and values:**")
-                st.json(attrs)
-            else:
-                st.error(f"❌ ArcGIS returned 0 features")
-                st.write("Raw response:", d2)
-        except Exception as e:
-            st.error(f"❌ ArcGIS failed: {e}")
