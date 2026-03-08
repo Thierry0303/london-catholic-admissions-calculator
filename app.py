@@ -238,6 +238,17 @@ def chance_explanation(row, baptised, church_attendance, sibling):
 merged = load_data()
 
 # ========================================
+#  QUERY PARAMS — shareable URLs
+# ========================================
+params = st.query_params
+_qp_postcode  = params.get("postcode", "")
+_qp_borough   = params.get("borough", "")
+_qp_stage     = params.get("stage", "Both")
+_qp_baptised  = params.get("baptised", "1") == "1"
+_qp_attend    = params.get("attend", "1") == "1"
+_qp_sibling   = params.get("sibling", "0") == "1"
+
+# ========================================
 #  HEADER
 # ========================================
 st.markdown("""
@@ -252,15 +263,17 @@ with st.sidebar:
     st.header("🔍 Search")
 
     # --- Postcode first ---
-    postcode_query = st.text_input("Your postcode (e.g. SW6 1AA)", placeholder="SW6 1AA")
+    postcode_query = st.text_input("Your postcode (e.g. SW6 1AA)", placeholder="SW6 1AA", value=_qp_postcode)
     max_distance_km = st.slider("Max distance (km)", 1, 20, 5, disabled=(not postcode_query))
 
     st.divider()
     st.subheader("Or filter by borough")
     boroughs = ["All boroughs"] + sorted([b for b in merged["Local Authority"].dropna().unique()])
-    selected_borough = st.selectbox("Borough", boroughs)
+    default_borough_idx = boroughs.index(_qp_borough) if _qp_borough in boroughs else 0
+    selected_borough = st.selectbox("Borough", boroughs, index=default_borough_idx)
 
-    child_stage = st.radio("My child needs", ["Primary", "Secondary", "Both"], index=2)
+    _stage_idx = ["Primary", "Secondary", "Both"].index(_qp_stage) if _qp_stage in ["Primary", "Secondary", "Both"] else 2
+    child_stage = st.radio("My child needs", ["Primary", "Secondary", "Both"], index=_stage_idx)
     primary_phases   = ["Primary", "Middle deemed primary", "All-through"]
     secondary_phases = ["Secondary", "Middle deemed secondary", "All-through", "Not applicable"]
     if child_stage == "Primary":
@@ -273,9 +286,9 @@ with st.sidebar:
     st.divider()
     st.subheader("Your situation")
     with st.expander("Admission criteria", expanded=True):
-        baptised = st.checkbox("Baptised Catholic", True)
-        church_attendance = st.checkbox("Regular church attendance", True)
-        sibling = st.checkbox("Sibling at school", False)
+        baptised = st.checkbox("Baptised Catholic", _qp_baptised)
+        church_attendance = st.checkbox("Regular church attendance", _qp_attend)
+        sibling = st.checkbox("Sibling at school", _qp_sibling)
 
 # ========================================
 #  APPLY FILTERS
@@ -321,6 +334,16 @@ if postcode_query and home_lat and "Distance (km)" in filtered.columns:
 else:
     filtered = filtered.sort_values("Your Chance", ascending=False)
 
+# Update URL query params for shareability
+st.query_params.update({
+    "postcode":  postcode_query or "",
+    "borough":   selected_borough if selected_borough != "All boroughs" else "",
+    "stage":     child_stage,
+    "baptised":  "1" if baptised else "0",
+    "attend":    "1" if church_attendance else "0",
+    "sibling":   "1" if sibling else "0",
+})
+
 # ========================================
 #  PERSONAL ADVICE BANNER
 # ========================================
@@ -361,9 +384,35 @@ st.divider()
 if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
     show_map = st.toggle("🗺️ Show map", value=False)
     if show_map:
-        map_data = filtered[["School Name", "Your Chance", "Latitude", "Longitude"]].dropna()
-        map_data = map_data.rename(columns={"Latitude": "lat", "Longitude": "lon"})
-        st.map(map_data)
+        import pydeck as pdk
+        map_data = filtered[["School Name", "Your Chance", "Oversub Ratio", "_no_data", "Latitude", "Longitude"]].dropna(subset=["Latitude","Longitude"]).copy()
+        def _dot_colour(row):
+            if row["_no_data"]: return [158, 158, 158]
+            if row["Oversub Ratio"] < 100: return [21, 101, 192]
+            c = row["Your Chance"]
+            if c >= 80: return [27, 94, 32]
+            if c >= 50: return [51, 105, 30]
+            return [183, 28, 28]
+        map_data["colour"] = map_data.apply(_dot_colour, axis=1)
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            map_data,
+            get_position=["Longitude", "Latitude"],
+            get_fill_color="colour",
+            get_radius=200,
+            pickable=True,
+        )
+        view = pdk.ViewState(
+            latitude=map_data["Latitude"].mean(),
+            longitude=map_data["Longitude"].mean(),
+            zoom=10,
+        )
+        st.pydeck_chart(pdk.Deck(
+            layers=[layer], initial_view_state=view,
+            tooltip={"text": "{School Name}\nChance: {Your Chance}%"},
+            map_style="mapbox://styles/mapbox/light-v10",
+        ))
+        st.caption("🟢 Good chance  🟡 Moderate  🔴 Difficult  🔵 Places available  ⚫ No data")
         st.divider()
 
 # ========================================
@@ -517,16 +566,23 @@ with st.expander("📊 Top 10 Most Oversubscribed London Catholic Schools"):
 #  SNOBE EXPLANATION FOOTNOTE
 # ========================================
 st.divider()
-st.caption(
-    "**Snobe grade**: Independent rating of school quality (separate from Ofsted). "
-    "Higher grades indicate better performance on academic and pastoral measures. "
-    "See [snobe.co.uk](https://snobe.co.uk) for methodology.\n\n"
-    "**IMD**: Index of Multiple Deprivation — England's official measure of relative deprivation by area. "
-    "Decile 1 = most deprived 10% of areas; Decile 10 = least deprived. Source: MHCLG / postcodes.io.\n\n"
-    "**Crime data**: Street-level incidents within ~500 m of the school, sourced from "
-    "[data.police.uk](https://data.police.uk). Reflects the surrounding area, not the school itself.\n\n"
-    "Built with love by a London parent • 2025 admissions data • Mobile-ready"
-)
+st.caption("Built with love by a London parent • 2025 admissions data • Mobile-ready")
+with st.expander("ℹ️ About this data"):
+    st.markdown(
+        "**Snobe grade** — Independent rating of school quality (separate from Ofsted). "
+        "See [snobe.co.uk](https://snobe.co.uk) for methodology.\n\n"
+        "**IMD (Deprivation)** — England's official Index of Multiple Deprivation by area. "
+        "Decile 1 = most deprived 10% of areas in England; Decile 10 = least deprived. "
+        "Source: MHCLG 2019.\n\n"
+        "**Crime data** — Street-level incidents within ~500 m of the school postcode, "
+        "sourced from [data.police.uk](https://data.police.uk). "
+        "Reflects the surrounding area, not the school itself.\n\n"
+        "**Oversubscription** — Based on first-preference applications received in the 2025 admissions round. "
+        "Schools may fill remaining places through second/third preference applicants.\n\n"
+        "**Your Chance** — A guide only, combining your Catholic priority tier with how oversubscribed "
+        "the school was in 2025. It is not a guarantee and does not account for every school's specific "
+        "admissions criteria."
+    )
 
 # ========================================
 
