@@ -163,7 +163,7 @@ def fetch_crime(lat: float, lon: float):
 #  IMD DATA — ONS Geography API (reliable)
 # ========================================
 @st.cache_data(show_spinner=False, ttl=3600)
-def fetch_imd(postcode: str, _v: int = 6):
+def fetch_imd(postcode: str, _v: int = 7):
     import urllib.request, json
     from urllib.parse import urlencode
 
@@ -450,7 +450,7 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=6)
+                            imd_data = fetch_imd(str(school["Postcode"]), _v=7)
                             if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
@@ -466,8 +466,6 @@ else:
                                     st.warning(f"DEBUG lsoa={imd_data.get('_lsoa')} errors={imd_data.get('_errors')} attrs={imd_data.get('_attrs')} raw={imd_data.get('_raw')}")
                                 else:
                                     st.warning("DEBUG: fetch_imd returned None")
-                        else:
-                            st.caption("No postcode available.")
                         else:
                             st.caption("No postcode available.")
 
