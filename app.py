@@ -163,27 +163,31 @@ def fetch_crime(lat: float, lon: float):
 #  IMD DATA — ONS Geography API (reliable)
 # ========================================
 @st.cache_data(show_spinner=False, ttl=60)
-def fetch_imd(postcode: str, _v: int = 9):
+def fetch_imd(postcode: str, _v: int = 10):
     import urllib.request, json
     from urllib.parse import urlencode
 
     clean = postcode.strip().upper().replace(" ", "")
 
-    # Step 1 — get LSOA
+    # Step 1 — get LSOA CODE (not name) from postcodes.io
     try:
         with urllib.request.urlopen(
             urllib.request.Request(f"https://api.postcodes.io/postcodes/{clean}", headers={"User-Agent": "Mozilla/5.0"}),
             timeout=6
         ) as r:
             d = json.loads(r.read())
-        lsoa = d["result"]["lsoa"] if d.get("status") == 200 else None
+        if d.get("status") == 200:
+            # 'codes' contains the actual ONS code e.g. E01003781
+            lsoa = d["result"].get("codes", {}).get("lsoa") or d["result"].get("lsoa")
+        else:
+            lsoa = None
     except Exception as e:
         return {"_err": f"postcodes.io failed: {e}"}
 
     if not lsoa:
         return {"_err": f"no LSOA for {clean}"}
 
-    # Step 2 — ONS ArcGIS IMD 2019
+    # Step 2 — ONS ArcGIS IMD 2019 — use lsoa11cd with the E-code
     from urllib.parse import quote
     where = f"lsoa11cd='{lsoa}'"
     params = f"where={quote(where)}&outFields=*&returnGeometry=false&f=json"
@@ -429,7 +433,7 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=9)
+                            imd_data = fetch_imd(str(school["Postcode"]), _v=10)
                             if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
