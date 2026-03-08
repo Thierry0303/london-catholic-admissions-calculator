@@ -163,7 +163,7 @@ def fetch_crime(lat: float, lon: float):
 #  IMD DATA — ONS Geography API (reliable)
 # ========================================
 @st.cache_data(show_spinner=False, ttl=60)
-def fetch_imd(postcode: str, _v: int = 8):
+def fetch_imd(postcode: str, _v: int = 9):
     import urllib.request, json
     from urllib.parse import urlencode
 
@@ -184,7 +184,9 @@ def fetch_imd(postcode: str, _v: int = 8):
         return {"_err": f"no LSOA for {clean}"}
 
     # Step 2 — ONS ArcGIS IMD 2019
-    params = urlencode({"where": f"lsoa11cd='{lsoa}'", "outFields": "*", "returnGeometry": "false", "f": "json"})
+    from urllib.parse import quote
+    where = f"lsoa11cd='{lsoa}'"
+    params = f"where={quote(where)}&outFields=*&returnGeometry=false&f=json"
     url = f"https://services3.arcgis.com/ivmBBrHfQfDnDf8Q/arcgis/rest/services/Indices_of_Multiple_Deprivation_IMD_2019/FeatureServer/0/query?{params}"
     try:
         with urllib.request.urlopen(
@@ -427,7 +429,7 @@ else:
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
-                            imd_data = fetch_imd(str(school["Postcode"]), _v=8)
+                            imd_data = fetch_imd(str(school["Postcode"]), _v=9)
                             if imd_data and imd_data.get("decile") is not None:
                                 desc, colour = imd_label(imd_data["decile"])
                                 st.markdown(
