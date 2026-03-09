@@ -430,6 +430,36 @@ if len(filtered) == 0:
     else:
         st.info("No schools match your current filters. Try selecting a different borough or phase.")
 else:
+    # ── Sort control ──
+    sort_col, _ = st.columns([2, 3])
+    with sort_col:
+        sort_options = ["Your Chance (highest first)", "Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
+        if postcode_query and home_lat and "Distance (km)" in filtered.columns:
+            sort_options = ["Distance (nearest first)"] + sort_options
+        sort_by = st.selectbox("Sort by", sort_options, label_visibility="collapsed",
+                               placeholder="Sort by…")
+
+    # Apply sort
+    OFSTED_ORDER = {"Outstanding": 0, "Good": 1, "Requires Improvement": 2, "Inadequate": 3, "Awaiting": 4}
+    SNOBE_ORDER  = {"A+": 0, "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "": 99}
+
+    if sort_by == "Distance (nearest first)" and "Distance (km)" in filtered.columns:
+        filtered = filtered.sort_values("Distance (km)", ascending=True)
+    elif sort_by == "Your Chance (highest first)":
+        filtered = filtered.sort_values("Your Chance", ascending=False)
+    elif sort_by == "Oversubscription (lowest first)":
+        filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
+    elif sort_by == "Ofsted rating":
+        filtered = filtered.copy()
+        filtered["_ofsted_order"] = filtered["Ofsted Badge"].map(OFSTED_ORDER).fillna(4)
+        filtered = filtered.sort_values("_ofsted_order")
+    elif sort_by == "Snobe grade":
+        filtered = filtered.copy()
+        filtered["_snobe_order"] = filtered["Snobe Overall Grade"].astype(str).str.strip().map(SNOBE_ORDER).fillna(99)
+        filtered = filtered.sort_values("_snobe_order")
+    elif sort_by == "Alphabetical":
+        filtered = filtered.sort_values("School Name")
+
     st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''}")
 
     for _, school in filtered.iterrows():
