@@ -6,6 +6,7 @@ import math
 import urllib.parse
 
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
+st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
 # ========================================
 #  DATA LOADING
@@ -387,9 +388,14 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
         import folium
         from streamlit_folium import st_folium
         map_data = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
-        centre_lat = map_data["Latitude"].mean()
-        centre_lon = map_data["Longitude"].mean()
-        m = folium.Map(location=[centre_lat, centre_lon], zoom_start=11, tiles="CartoDB positron")
+        if home_lat and home_lon:
+            centre_lat, centre_lon = home_lat, home_lon
+            zoom = 13 if max_distance_km <= 3 else 12 if max_distance_km <= 7 else 11
+        else:
+            centre_lat = map_data["Latitude"].mean()
+            centre_lon = map_data["Longitude"].mean()
+            zoom = 11
+        m = folium.Map(location=[centre_lat, centre_lon], zoom_start=zoom, tiles="CartoDB positron")
         for _, row in map_data.iterrows():
             if row["_no_data"]:
                 colour = "gray"
@@ -414,7 +420,9 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
                 popup=folium.Popup(f"<b>{row['School Name']}</b><br>{chance_str}", max_width=200),
                 tooltip=row["School Name"],
             ).add_to(m)
-        st_folium(m, width="100%", height=450, returned_objects=[])
+        # key forces re-render when filters change
+        map_key = f"map_{postcode_query}_{selected_borough}_{child_stage}_{len(map_data)}"
+        st_folium(m, width="100%", height=450, returned_objects=[], key=map_key)
         st.caption("🟢 Good chance  🟠 Moderate  🔴 Difficult  🔵 Places available  ⚫ No data")
         st.divider()
 
@@ -430,14 +438,13 @@ if len(filtered) == 0:
     else:
         st.info("No schools match your current filters. Try selecting a different borough or phase.")
 else:
-    # ── Sort control ──
-    sort_col, _ = st.columns([2, 3])
+    # ── Sort control — left: count, right: sort dropdown ──
+    count_col, sort_col = st.columns([3, 2])
     with sort_col:
         sort_options = ["Your Chance (highest first)", "Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
         if postcode_query and home_lat and "Distance (km)" in filtered.columns:
             sort_options = ["Distance (nearest first)"] + sort_options
-        sort_by = st.selectbox("Sort by", sort_options, label_visibility="collapsed",
-                               placeholder="Sort by…")
+        sort_by = st.selectbox("↕️ Sort by", sort_options, label_visibility="visible")
 
     # Apply sort
     OFSTED_ORDER = {"Outstanding": 0, "Good": 1, "Requires Improvement": 2, "Inadequate": 3, "Awaiting": 4}
@@ -460,7 +467,8 @@ else:
     elif sort_by == "Alphabetical":
         filtered = filtered.sort_values("School Name")
 
-    st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''}")
+    with count_col:
+        st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''}")
 
     for _, school in filtered.iterrows():
         with st.container():
@@ -599,6 +607,13 @@ with st.expander("📊 Top 10 Most Oversubscribed London Catholic Schools"):
 #  SNOBE EXPLANATION FOOTNOTE
 # ========================================
 st.divider()
+st.markdown(
+    '<div style="text-align:center;margin-bottom:8px">'
+    '<a href="#top" style="background:#0055a5;color:white;padding:8px 20px;'
+    'border-radius:20px;text-decoration:none;font-size:0.9rem;">⬆️ Back to top</a>'
+    '</div>',
+    unsafe_allow_html=True
+)
 st.caption("Built with love by a London parent • 2025 admissions data • Mobile-ready")
 with st.expander("ℹ️ About this data"):
     st.markdown(
