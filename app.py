@@ -366,12 +366,54 @@ if len(filtered) > 0:
     n = len(filtered)
     location_label = f"within {max_distance_km}km of {postcode_query.upper()}" if postcode_query and home_lat else selected_borough
 
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b = st.columns(2)
     col_a.metric("Schools found", n)
     col_b.metric("Avg oversubscription", f"{avg_oversub}%")
-    most_competitive = data_schools.loc[data_schools["Oversub Ratio"].idxmax(), "School Name"] if len(data_schools) else "—"
-    col_c.metric("Most competitive", most_competitive[:25] + ("…" if len(most_competitive) > 25 else ""))
     st.caption(f"Results for: **{location_label}**  •  Last updated: March 2025")
+
+    # Top 10 most competitive
+    if len(data_schools) >= 3:
+        with st.expander("🏆 Most competitive schools (by oversubscription)"):
+            top10 = (
+                data_schools[data_schools["Oversub Ratio"] > 100]
+                .sort_values("Oversub Ratio", ascending=False)
+                .head(10)
+                .reset_index(drop=True)
+            )
+            top10.index += 1
+            if len(top10):
+                rows_html = ""
+                for rank, row in top10.iterrows():
+                    ratio = int(row["Oversub Ratio"])
+                    if ratio >= 300:
+                        bar_color = "#B71C1C"
+                    elif ratio >= 200:
+                        bar_color = "#E65100"
+                    elif ratio >= 130:
+                        bar_color = "#F9A825"
+                    else:
+                        bar_color = "#2E7D32"
+                    bar_width = min(100, int((ratio / 600) * 100))
+                    phase_icon = "🏫" if row["Phase"] == "Secondary" else "🎒"
+                    dist_str = f" · {row['Distance (km)']:.1f} km" if "Distance (km)" in row and pd.notna(row.get("Distance (km)")) else ""
+                    rows_html += f"""
+                    <tr>
+                      <td style='padding:6px 8px;font-weight:bold;color:#888;width:28px'>{rank}</td>
+                      <td style='padding:6px 8px;'>
+                        <span style='font-weight:600'>{phase_icon} {row['School Name']}</span>
+                        <span style='color:#888;font-size:0.85rem'> · {row['Local Authority']}{dist_str}</span>
+                        <div style='background:#eee;border-radius:4px;height:6px;margin-top:4px;'>
+                          <div style='background:{bar_color};width:{bar_width}%;height:6px;border-radius:4px'></div>
+                        </div>
+                      </td>
+                      <td style='padding:6px 8px;font-weight:bold;color:{bar_color};white-space:nowrap;text-align:right'>{ratio}%</td>
+                    </tr>"""
+                st.markdown(
+                    f"<table style='width:100%;border-collapse:collapse;font-size:0.9rem'>{rows_html}</table>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.caption("No oversubscribed schools in current filter.")
 
 st.divider()
 
