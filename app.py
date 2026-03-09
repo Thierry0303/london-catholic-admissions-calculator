@@ -324,16 +324,11 @@ filtered = filtered[filtered["Phase"].isin(selected_phase)]
 filtered = filtered.copy()
 filtered["_no_data"] = (filtered["Apps Received 2025"] == 0) & (filtered["PAN"] == 0)
 
-# Likelihood
-filtered["Your Chance"] = filtered.apply(
-    lambda r: calculate_likelihood(r, baptised, church_attendance, sibling), axis=1
-)
-
-# Fix 1: Sort by distance when postcode active, otherwise by chance
+# Default sort: by distance if postcode active, otherwise by oversubscription
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
-    filtered = filtered.sort_values(["Distance (km)", "Your Chance"], ascending=[True, False])
+    filtered = filtered.sort_values("Distance (km)", ascending=True)
 else:
-    filtered = filtered.sort_values("Your Chance", ascending=False)
+    filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
 
 # Update URL query params for shareability
 st.query_params.update({
@@ -367,14 +362,15 @@ if distance_warning:
 if len(filtered) > 0:
     data_schools = filtered[~filtered["_no_data"]]
     avg_oversub = int(data_schools["Oversub Ratio"].mean()) if len(data_schools) else 0
-    best_chance = int(data_schools["Your Chance"].max()) if len(data_schools) else 0
+    best_chance = 0  # unused, kept for compatibility
     n = len(filtered)
     location_label = f"within {max_distance_km}km of {postcode_query.upper()}" if postcode_query and home_lat else selected_borough
 
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Schools found", n)
     col_b.metric("Avg oversubscription", f"{avg_oversub}%")
-    col_c.metric("Best chance for you", f"{best_chance}%")
+    most_competitive = data_schools.loc[data_schools["Oversub Ratio"].idxmax(), "School Name"] if len(data_schools) else "—"
+    col_c.metric("Most competitive", most_competitive[:25] + ("…" if len(most_competitive) > 25 else ""))
     st.caption(f"Results for: **{location_label}**  •  Last updated: March 2025")
 
 st.divider()
@@ -401,14 +397,14 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
                 colour = "gray"
             elif row["Oversub Ratio"] < 100:
                 colour = "blue"
-            elif row["Your Chance"] >= 80:
-                colour = "green"
-            elif row["Your Chance"] >= 50:
+            elif row["Oversub Ratio"] >= 300:
+                colour = "red"
+            elif row["Oversub Ratio"] >= 200:
                 colour = "orange"
             else:
-                colour = "red"
+                colour = "green"
             chance_str = "No data" if row["_no_data"] else (
-                "Places available" if row["Oversub Ratio"] < 100 else f"{int(row['Your Chance'])}% chance"
+                "Places available" if row["Oversub Ratio"] < 100 else f"{int(row['Oversub Ratio'])}% oversubscribed"
             )
             folium.CircleMarker(
                 location=[row["Latitude"], row["Longitude"]],
@@ -423,7 +419,7 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
         # key forces re-render when filters change
         map_key = f"map_{postcode_query}_{selected_borough}_{child_stage}_{len(map_data)}"
         st_folium(m, width="100%", height=450, returned_objects=[], key=map_key)
-        st.caption("🟢 Good chance  🟠 Moderate  🔴 Difficult  🔵 Places available  ⚫ No data")
+        st.caption("🟢 Lower demand  🟠 Moderate  🔴 Very high demand  🔵 Places available  ⚫ No data")
         st.divider()
 
 # ========================================
@@ -441,7 +437,7 @@ else:
     # ── Sort control — left: count, right: sort dropdown ──
     count_col, sort_col = st.columns([3, 2])
     with sort_col:
-        sort_options = ["Your Chance (highest first)", "Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
+        sort_options = ["Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
         if postcode_query and home_lat and "Distance (km)" in filtered.columns:
             sort_options = ["Distance (nearest first)"] + sort_options
         sort_by = st.selectbox("↕️ Sort by", sort_options, label_visibility="visible")
@@ -452,8 +448,6 @@ else:
 
     if sort_by == "Distance (nearest first)" and "Distance (km)" in filtered.columns:
         filtered = filtered.sort_values("Distance (km)", ascending=True)
-    elif sort_by == "Your Chance (highest first)":
-        filtered = filtered.sort_values("Your Chance", ascending=False)
     elif sort_by == "Oversubscription (lowest first)":
         filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
     elif sort_by == "Ofsted rating":
@@ -511,18 +505,29 @@ else:
                         )
                         st.caption(f"{school['Apps Received 2025']} apps for {school['PAN']} places in 2025")
                     else:
-                        chance = int(school['Your Chance'])
-                        color = "#1B5E20" if chance >= 80 else "#33691E" if chance >= 50 else "#B71C1C"
+                        oversub = school['Oversub Ratio']
+                        if oversub >= 300:
+                            badge_color, badge_label = "#B71C1C", "Very high<br>demand"
+                        elif oversub >= 200:
+                            badge_color, badge_label = "#E65100", "High<br>demand"
+                        elif oversub >= 130:
+                            badge_color, badge_label = "#F9A825", "Moderate<br>demand"
+                        else:
+                            badge_color, badge_label = "#2E7D32", "Lower<br>demand"
                         st.markdown(
-                            f"<div style='background:{color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:1.3rem'>{chance}%</div>",
+                            f"<div style='background:{badge_color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:0.95rem'>{badge_label}</div>",
                             unsafe_allow_html=True
                         )
-                        st.caption("your chance")
+                        st.caption("Catholics prioritised")
 
             # How calculated
-            with st.expander("How is this calculated?"):
-                st.caption(chance_explanation(school, baptised, church_attendance, sibling))
-                st.caption("Chance combines your Catholic priority score with how oversubscribed the school is. It's a guide, not a guarantee.")
+            with st.expander("ℹ️ About these figures"):
+                st.caption(
+                    f"**{school['Apps Received 2025']:.0f} applications** were made for **{school['PAN']} places** in 2025. "
+                    f"As a Catholic school, places are prioritised for baptised Catholics. "
+                    f"Non-Catholics rarely receive an offer at oversubscribed Catholic schools. "
+                    f"The oversubscription ratio reflects all applicants, not just Catholics."
+                )
 
             # Neighbourhood context (crime + IMD)
             has_coords = pd.notna(school.get("Latitude")) and pd.notna(school.get("Longitude"))
@@ -627,9 +632,9 @@ with st.expander("ℹ️ About this data"):
         "Reflects the surrounding area, not the school itself.\n\n"
         "**Oversubscription** — Based on first-preference applications received in the 2025 admissions round. "
         "Schools may fill remaining places through second/third preference applicants.\n\n"
-        "**Your Chance** — A guide only, combining your Catholic priority tier with how oversubscribed "
-        "the school was in 2025. It is not a guarantee and does not account for every school's specific "
-        "admissions criteria."
+        "**Faith priority** — Catholic schools prioritise baptised Catholics. The oversubscription ratio "
+        "includes all applicants; non-Catholics rarely receive offers at oversubscribed Catholic schools. "
+        "Check each school's admissions policy for the exact criteria order."
     )
 
 # ========================================
