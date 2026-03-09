@@ -384,35 +384,38 @@ st.divider()
 if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
     show_map = st.toggle("🗺️ Show map", value=False)
     if show_map:
-        import pydeck as pdk
-        map_data = filtered[["School Name", "Your Chance", "Oversub Ratio", "_no_data", "Latitude", "Longitude"]].dropna(subset=["Latitude","Longitude"]).copy()
-        def _dot_colour(row):
-            if row["_no_data"]: return [158, 158, 158]
-            if row["Oversub Ratio"] < 100: return [21, 101, 192]
-            c = row["Your Chance"]
-            if c >= 80: return [27, 94, 32]
-            if c >= 50: return [51, 105, 30]
-            return [183, 28, 28]
-        map_data["colour"] = map_data.apply(_dot_colour, axis=1)
-        layer = pdk.Layer(
-            "ScatterplotLayer",
-            map_data,
-            get_position=["Longitude", "Latitude"],
-            get_fill_color="colour",
-            get_radius=200,
-            pickable=True,
-        )
-        view = pdk.ViewState(
-            latitude=map_data["Latitude"].mean(),
-            longitude=map_data["Longitude"].mean(),
-            zoom=10,
-        )
-        st.pydeck_chart(pdk.Deck(
-            layers=[layer], initial_view_state=view,
-            tooltip={"text": "{School Name}\nChance: {Your Chance}%"},
-            map_style="mapbox://styles/mapbox/light-v10",
-        ))
-        st.caption("🟢 Good chance  🟡 Moderate  🔴 Difficult  🔵 Places available  ⚫ No data")
+        import folium
+        from streamlit_folium import st_folium
+        map_data = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
+        centre_lat = map_data["Latitude"].mean()
+        centre_lon = map_data["Longitude"].mean()
+        m = folium.Map(location=[centre_lat, centre_lon], zoom_start=11, tiles="CartoDB positron")
+        for _, row in map_data.iterrows():
+            if row["_no_data"]:
+                colour = "gray"
+            elif row["Oversub Ratio"] < 100:
+                colour = "blue"
+            elif row["Your Chance"] >= 80:
+                colour = "green"
+            elif row["Your Chance"] >= 50:
+                colour = "orange"
+            else:
+                colour = "red"
+            chance_str = "No data" if row["_no_data"] else (
+                "Places available" if row["Oversub Ratio"] < 100 else f"{int(row['Your Chance'])}% chance"
+            )
+            folium.CircleMarker(
+                location=[row["Latitude"], row["Longitude"]],
+                radius=8,
+                color=colour,
+                fill=True,
+                fill_color=colour,
+                fill_opacity=0.8,
+                popup=folium.Popup(f"<b>{row['School Name']}</b><br>{chance_str}", max_width=200),
+                tooltip=row["School Name"],
+            ).add_to(m)
+        st_folium(m, width="100%", height=450, returned_objects=[])
+        st.caption("🟢 Good chance  🟠 Moderate  🔴 Difficult  🔵 Places available  ⚫ No data")
         st.divider()
 
 # ========================================
