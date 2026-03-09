@@ -368,7 +368,10 @@ if len(filtered) > 0:
 
     col_a, col_b = st.columns(2)
     col_a.metric("Schools found", n)
-    col_b.metric("Avg oversubscription", f"{avg_oversub}%")
+    avg_apps = data_schools["Apps Received 2025"].mean() if len(data_schools) else 0
+    avg_pan  = data_schools["PAN"].replace(0,1).mean() if len(data_schools) else 1
+    avg_ratio_str = f"{avg_apps/avg_pan:.1f}:1" if avg_pan else "—"
+    col_b.metric("Avg applications per place", avg_ratio_str)
     st.caption(f"Results for: **{location_label}**  •  Last updated: March 2025")
 
     # Top 10 most competitive
@@ -385,6 +388,9 @@ if len(filtered) > 0:
                 rows_html = ""
                 for rank, row in top10.iterrows():
                     ratio = int(row["Oversub Ratio"])
+                    apps  = int(row["Apps Received 2025"])
+                    pan   = int(row["PAN"]) if row["PAN"] > 0 else 1
+                    ratio_str = f"{apps}:{pan}"
                     if ratio >= 300:
                         bar_color = "#B71C1C"
                     elif ratio >= 200:
@@ -406,7 +412,7 @@ if len(filtered) > 0:
                           <div style='background:{bar_color};width:{bar_width}%;height:6px;border-radius:4px'></div>
                         </div>
                       </td>
-                      <td style='padding:6px 8px;font-weight:bold;color:{bar_color};white-space:nowrap;text-align:right'>{ratio}%</td>
+                      <td style='padding:6px 8px;font-weight:bold;color:{bar_color};white-space:nowrap;text-align:right'>{ratio_str}</td>
                     </tr>"""
                 st.markdown(
                     f"<table style='width:100%;border-collapse:collapse;font-size:0.9rem'>{rows_html}</table>",
@@ -446,7 +452,7 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
             else:
                 colour = "green"
             chance_str = "No data" if row["_no_data"] else (
-                "Places available" if row["Oversub Ratio"] < 100 else f"{int(row['Oversub Ratio'])}% oversubscribed"
+                "Places available" if row["Oversub Ratio"] < 100 else f"{int(row['Apps Received 2025'])}:{int(row['PAN'])} apps:places"
             )
             folium.CircleMarker(
                 location=[row["Latitude"], row["Longitude"]],
@@ -519,7 +525,7 @@ else:
                 if school.get("_no_data"):
                     st.caption("⚠️ No 2025 admissions data available for this school")
                 else:
-                    st.caption(f"Oversubscription: **{school['Oversub Ratio']}%** ({school['Apps Received 2025']} apps for {school['PAN']} places)")
+                    st.caption(f"Applications vs places: **{int(school['Apps Received 2025'])}:{int(school['PAN'])}** ({school['Apps Received 2025']} apps for {school['PAN']} places)")
 
                 badges = []
                 if school.get("Phase") == "Not applicable":
@@ -545,9 +551,12 @@ else:
                             "text-align:center;font-weight:bold;font-size:0.95rem'>Low<br>demand</div>",
                             unsafe_allow_html=True
                         )
-                        st.caption(f"{school['Apps Received 2025']} apps for {school['PAN']} places in 2025")
+                        st.caption(f"{int(school['Apps Received 2025'])}:{int(school['PAN'])} apps:places")
                     else:
                         oversub = school['Oversub Ratio']
+                        apps = int(school['Apps Received 2025'])
+                        pan  = int(school['PAN'])
+                        ratio_str = f"{apps}:{pan}"
                         if oversub >= 300:
                             badge_color, badge_label = "#B71C1C", "Very high<br>demand"
                         elif oversub >= 200:
@@ -560,7 +569,7 @@ else:
                             f"<div style='background:{badge_color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:0.95rem'>{badge_label}</div>",
                             unsafe_allow_html=True
                         )
-                        st.caption("Catholics prioritised")
+                        st.caption(f"{ratio_str} apps:places · Catholics prioritised")
 
             # How calculated
             with st.expander("ℹ️ About these figures"):
