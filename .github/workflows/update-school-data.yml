@@ -2,13 +2,14 @@ name: Auto-Update Catholic Schools Data
 
 on:
   schedule:
-    - cron: '0 4 * * 1'          # Every Monday at 4:00 UTC (~5am UK time). Change to '0 3 * * *' for daily at 3am UTC if preferred.
-  workflow_dispatch:             # Lets you trigger manually from the Actions tab
+    - cron: '0 4 * * 1'  # Every Monday at 4:00 UTC (~5am UK)
+  workflow_dispatch:
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
-
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Opt-in to Node.js 24 to avoid deprecation failures
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,5 +31,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "🤖 Auto-updated Catholic schools data [ci skip]"
-          file_pattern: catholic_schools_with_pan_coords.csv   # ← exact file name in root
-          skip_dirty_check: false
+          file_pattern: catholic_schools_with_pan_coords.csv
