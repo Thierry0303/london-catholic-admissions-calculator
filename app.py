@@ -15,13 +15,16 @@ FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
 
 @st.cache_data
-df = pd.read_csv("catholic_schools_with_pan_coords.csv")
+def load_data():
+    df = pd.read_csv("catholic_schools_with_pan_coords.csv")
 
-if 'Last Updated' in df.columns:
-    last_date = df['Last Updated'].max()
-    st.caption(f"📅 Data last auto-updated: {last_date}")
-else:
-    st.caption("Data auto-update active — last processed today")
+    if 'Last Updated' in df.columns:
+        last_date = df['Last Updated'].max()
+        st.caption(f"📅 Data last auto-updated: {last_date}")
+    else:
+        st.caption("Data auto-update active – last processed today")
+
+    return df
 
     df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
