@@ -1,26 +1,29 @@
 name: Update Catholic Schools Data
 
 on:
-  workflow_dispatch:      # allow manual trigger
+  workflow_dispatch:        # allow manual trigger
   schedule:
-    - cron: "0 3 * * *"   # run daily at 03:00 UTC
+    - cron: "0 3 * * *"     # run daily at 03:00 UTC
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout repository (fresh clone)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # ensures latest commit is fetched
+          clean: true        # wipes any cached copy
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run update script
