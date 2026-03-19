@@ -1,36 +1,35 @@
-name: Auto-Update Catholic Schools Data
+name: Update Catholic Schools Data
 
 on:
   schedule:
-    - cron: '0 4 * * 1'  # Every Monday at 4:00 UTC (~5am UK time)
-  workflow_dispatch:     # Allows manual trigger from Actions tab
+    - cron: '0 9 * * 1'  # Every Monday 9AM UTC
+  workflow_dispatch:  # Manual trigger button
 
 jobs:
-  update-data:
+  update:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write    # Required for git-auto-commit to push changes
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6  # Latest stable - supports Node 24 natively
-
-      - name: Set up Python
-        uses: actions/setup-python@v6  # Current version - Node 24 native
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas requests  # From your requirements.txt
-
-      - name: Run data update script
-        run: python update_data.py
-
-      - name: Commit and push changes if any
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          commit_message: "🤖 Auto-updated Catholic schools data [ci skip]"
-          file_pattern: catholic_schools_with_pan_coords.csv
-          push_options: '--force'  # Forces overwrite to fix non-fast-forward rejections
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: pip install pandas requests
+    
+    - name: Run data update
+      run: python update_data.py
+    
+    - name: Commit and push changes
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add catholic_schools_with_pan_coords.csv
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Update admissions data $(date +%Y-%m-%d)"
+          git push
+        fi
