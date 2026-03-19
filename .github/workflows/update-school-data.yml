@@ -3,35 +3,33 @@ name: Auto-Update Catholic Schools Data
 on:
   schedule:
     - cron: '0 4 * * 1'  # Every Monday at 4:00 UTC (~5am UK time)
-  workflow_dispatch:
+  workflow_dispatch:     # Allows manual trigger from Actions tab
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # Forces Node 24 for all JS actions (fixes deprecation block)
     permissions:
-      contents: write  # Required for git-auto-commit to push changes
+      contents: write    # Required for git-auto-commit to push changes
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5  # Bumped to v5 for Node 24 support
+        uses: actions/checkout@v6  # Latest (v6.0.2 as of Jan 2026) - supports Node 24
 
       - name: Set up Python
-        uses: actions/setup-python@v6  # Bumped to v6 for Node 24 support
+        uses: actions/setup-python@v6  # Current version - Node 24 native
         with:
-          python-version: '3.11'
+          python-version: '3.11'     # Or '3.12' if you prefer
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas
+          pip install pandas requests   # Add any others from requirements.txt
 
       - name: Run data update script
         run: python update_data.py
 
       - name: Commit and push changes if any
-        uses: stefanzweifel/git-auto-commit-action@v7  # Bumped to v7 for Node 24 support
+        uses: stefanzweifel/git-auto-commit-action@v7  # v7.1.0 latest - Node 24 compatible
         with:
           commit_message: "🤖 Auto-updated Catholic schools data [ci skip]"
           file_pattern: catholic_schools_with_pan_coords.csv
