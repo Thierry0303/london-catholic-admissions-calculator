@@ -13,24 +13,24 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6  # Latest (v6.0.2 as of Jan 2026) - supports Node 24 natively
+        uses: actions/checkout@v6  # Latest stable - supports Node 24 natively
 
       - name: Set up Python
         uses: actions/setup-python@v6  # Current version - Node 24 native
         with:
-          python-version: '3.11'     # Or '3.12' if you prefer
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas requests  # Add any others from requirements.txt if needed
+          pip install pandas requests  # From your requirements.txt
 
       - name: Run data update script
         run: python update_data.py
 
       - name: Commit and push changes if any
-        uses: stefanzweifel/git-auto-commit-action@v7  # v7.x - Node 24 compatible
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "🤖 Auto-updated Catholic schools data [ci skip]"
           file_pattern: catholic_schools_with_pan_coords.csv
-          push_options: '--force'  # Forces push to overwrite remote if diverged (fixes non-fast-forward error)
+          push_options: '--force'  # Forces overwrite to fix non-fast-forward rejections
