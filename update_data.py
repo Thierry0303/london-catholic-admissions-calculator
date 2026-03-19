@@ -107,4 +107,4 @@ df = df.sort_values(['Local Authority', 'School Name']).drop_duplicates(subset=[
 
 df.to_csv(OUTPUT_FILE, index=False)
 print(f"✅ PRODUCTION READY: {len(df)} Catholic schools")
-print(f"📊 FSM:{df['FSM_percent'].mean():.1f}% | PAN:{df['PAN'].mean():.0f} | Crime:{df['Crime_index'].mean():.0f} | IMD:{df['IMD_rank'].mean():.0f}") | SNO:{df['IMD_rank'].mean():.0f}")
+print(f"📊 FSM:{df['FSM_percent'].mean():.1f}% | PAN:{df['PAN'].mean():.0f} | Crime:{df['Crime_index'].mean():.0f} | IMD:{df['IMD_rank'].mean():.0f}")
