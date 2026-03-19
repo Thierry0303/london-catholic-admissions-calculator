@@ -20,7 +20,10 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
     Fetch latest DfE 'School applications and offers' CSV via data.gov.uk API,
     filter to London + Catholic, and return a tidy DataFrame with URN, PAN, Apps.
     """
-    PACKAGE_URL = "https://www.data.gov.uk/api/3/action/package_show?id=school-applications-and-offers"
+
+    # 🔥 FIXED ENDPOINT — this one works
+    PACKAGE_URL = "https://www.data.gov.uk/api/3/action/package_show?id=school-applications-and-offers-england"
+
     print("🔎 Fetching DfE admissions package metadata…")
     r = requests.get(PACKAGE_URL, timeout=20)
     r.raise_for_status()
@@ -155,25 +158,4 @@ def main():
         dfe_col = f"{col}_DfE"
         if dfe_col in merged.columns:
             merged[col] = merged[dfe_col].fillna(merged.get(col))
-            merged.drop(columns=[dfe_col], inplace=True, errors="ignore")
-
-    # Clean numeric again
-    merged["PAN"] = pd.to_numeric(merged.get("PAN"), errors="coerce").fillna(0).astype(int)
-    merged["Apps Received 2025"] = pd.to_numeric(merged.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
-
-    print("📊 Computing oversubscription ratios…")
-    merged["Oversub Ratio"] = (
-        merged["Apps Received 2025"] / merged["PAN"].replace(0, 1) * 100
-    ).round(0).astype(int)
-
-    print("🏅 Updating Snobe ratings (fast mode)…")
-    merged = update_snobe_grades(merged)
-
-    print(f"💾 Saving updated file → {OUTPUT_FILE}")
-    merged.to_csv(OUTPUT_FILE, index=False)
-
-    print("🎉 FULL UPDATE COMPLETE")
-
-
-if __name__ == "__main__":
-    main()
+            merged.drop(columns
