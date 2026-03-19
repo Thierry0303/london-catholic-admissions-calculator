@@ -1,0 +1,36 @@
+name: Auto-Update Catholic Schools Data
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'  # Every Monday at 4:00 UTC (~5am UK time)
+  workflow_dispatch:     # Allows manual trigger from Actions tab
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # Required for git-auto-commit to push changes
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6  # Latest stable - supports Node 24 natively
+
+      - name: Set up Python
+        uses: actions/setup-python@v6  # Current version - Node 24 native
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests  # From your requirements.txt
+
+      - name: Run data update script
+        run: python update_data.py
+
+      - name: Commit and push changes if any
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "🤖 Auto-updated Catholic schools data [ci skip]"
+          file_pattern: catholic_schools_with_pan_coords.csv
+          push_options: '--force'  # Forces overwrite to fix non-fast-forward rejections
