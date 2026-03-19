@@ -61,4 +61,4 @@ except Exception as e:
 # 2. CRIME DATA - London borough rates (per 1,000)
 london_crime = {
     'Westminster': 85, 'Kensington and Chelsea': 62, 'Tower Hamlets': 78, 'Hackney': 82, 
-    'Newham': 88, 'Camden':
+    'Newham': 88, 'Camden':}
