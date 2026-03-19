@@ -1,9 +1,9 @@
 name: Update Catholic Schools Data
 
 on:
-  workflow_dispatch:        # allow manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"     # run daily at 03:00 UTC
+    - cron: "0 3 * * *"
 
 jobs:
   update-data:
@@ -13,8 +13,14 @@ jobs:
       - name: Checkout repository (fresh clone)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0     # ensures latest commit is fetched
-          clean: true        # wipes any cached copy
+          fetch-depth: 0
+          clean: true
+
+      - name: DEBUG — show update_data.py content
+        run: |
+          echo "===== FILE CONTENT START ====="
+          cat update_data.py
+          echo "===== FILE CONTENT END ====="
 
       - name: Set up Python
         uses: actions/setup-python@v5
