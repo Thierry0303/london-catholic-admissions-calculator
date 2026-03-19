@@ -3,7 +3,7 @@ name: Update Catholic Schools Data
 on:
   workflow_dispatch:      # allow manual trigger
   schedule:
-    - cron: "0 3 * * *"   # run daily at 03:00 UTC (03:00 London time in winter, 04:00 in summer)
+    - cron: "0 3 * * *"   # run daily at 03:00 UTC
 
 jobs:
   update-data:
