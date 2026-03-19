@@ -3,16 +3,18 @@ name: Update Catholic Schools Data
 on:
   schedule:
     - cron: '0 9 * * 1'  # Every Monday 9AM UTC
-  workflow_dispatch:  # Manual trigger button
+  workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # ← FIXES push permissions
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5      # ← v5 = Node 24 ready
     
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v5  # ← v5 = Node 24 ready
       with:
         python-version: '3.11'
     
