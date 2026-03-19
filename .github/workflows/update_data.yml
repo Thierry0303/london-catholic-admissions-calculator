@@ -1,37 +1,35 @@
 name: Update Catholic Schools Data
 
 on:
+  workflow_dispatch:      # allow manual trigger
   schedule:
-    - cron: '0 9 * * 1'  # Every Monday 9AM UTC
-  workflow_dispatch:
+    - cron: "0 3 * * *"   # run daily at 03:00 UTC (03:00 London time in winter, 04:00 in summer)
 
 jobs:
-  update:
+  update-data:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # ← FIXES push permissions
+
     steps:
-    - uses: actions/checkout@v5      # ← v5 = Node 24 ready
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5  # ← v5 = Node 24 ready
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: pip install pandas requests
-    
-    - name: Run data update
-      run: python update_data.py
-    
-    - name: Commit and push changes
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add catholic_schools_with_pan_coords.csv
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "Update admissions data $(date +%Y-%m-%d)"
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run update script
+        run: python update_data.py
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add catholic_schools_with_pan_coords.csv
+          git commit -m "Auto-update Catholic schools data" || echo "No changes to commit"
           git push
-        fi
