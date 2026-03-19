@@ -21,7 +21,6 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
     filter to London + Catholic, and return a tidy DataFrame with URN, PAN, Apps.
     """
 
-    # 🔥 FIXED ENDPOINT — this one works
     PACKAGE_URL = "https://www.data.gov.uk/api/3/action/package_show?id=school-applications-and-offers-england"
 
     print("🔎 Fetching DfE admissions package metadata…")
@@ -29,10 +28,10 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
     r.raise_for_status()
     pkg = r.json()["result"]
 
-    # Pick latest CSV resource by last_modified
     csv_resources = [res for res in pkg["resources"] if res["format"].lower() == "csv"]
     if not csv_resources:
         raise RuntimeError("No CSV resources found in DfE package.")
+
     latest = max(csv_resources, key=lambda res: res.get("last_modified") or "")
     url = latest["url"]
     print(f"⬇️  Downloading latest admissions CSV:\n    {url}")
@@ -40,8 +39,8 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
     df = pd.read_csv(url)
     print(f"✅ Loaded DfE admissions: {len(df)} rows")
 
-    # Try to normalise column names a bit
     cols = {c.lower().strip(): c for c in df.columns}
+
     def find_col(*candidates):
         for cand in candidates:
             if cand.lower() in cols:
@@ -61,6 +60,7 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
         ("PAN", pan_col),
         ("Applications", apps_col),
     ] if col is None]
+
     if missing:
         raise RuntimeError(f"Missing expected columns in DfE CSV: {', '.join(missing)}")
 
@@ -72,49 +72,42 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
         apps_col: "Apps Received 2025",
     })
 
-    # Filter to London boroughs
     df["Local Authority"] = df["Local Authority"].astype(str).str.strip()
     df = df[df["Local Authority"].isin(LONDON_BOROUGHS)]
 
-    # Filter to Catholic schools
     df["ReligiousCharacter"] = df["ReligiousCharacter"].astype(str)
     df = df[df["ReligiousCharacter"].str.contains("Roman Catholic", case=False, na=False)]
 
-    # Clean numeric
     df["URN"] = pd.to_numeric(df["URN"], errors="coerce").astype("Int64")
     df["PAN"] = pd.to_numeric(df["PAN"], errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors="coerce").fillna(0).astype(int)
 
     df = df.dropna(subset=["URN"])
     print(f"✅ Filtered to London Catholic schools: {len(df)} rows")
+
     return df[["URN", "Local Authority", "PAN", "Apps Received 2025"]]
 
 
 def fetch_snobe_grade(urn: int) -> str | None:
-    """
-    Fetch Snobe Overall Grade for a given URN.
-    Returns grade string like 'A+' or None if not found.
-    """
     url = f"https://snobe.co.uk/schools/{urn}"
     try:
         resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code != 200:
             return None
+
         soup = BeautifulSoup(resp.text, "html.parser")
         text = soup.get_text(" ", strip=True)
 
         for token in ["A+", "A", "B", "C", "D", "E"]:
             if f"Overall Grade {token}" in text or f"Overall grade {token}" in text:
                 return token
+
         return None
     except Exception:
         return None
 
 
 def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Fast mode: only fetch Snobe grade where 'Snobe Overall Grade' is missing/blank.
-    """
     if "Snobe Overall Grade" not in df.columns:
         df["Snobe Overall Grade"] = ""
 
@@ -126,15 +119,19 @@ def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     print(f"🔎 Updating Snobe grades for {len(to_update)} schools (fast mode)…")
+
     for i, (idx, row) in enumerate(to_update.iterrows(), start=1):
         urn = int(row["URN"])
         grade = fetch_snobe_grade(urn)
+
         if grade:
             df.loc[idx, "Snobe Overall Grade"] = grade
             print(f"  [{i}/{len(to_update)}] URN {urn}: Snobe {grade}")
         else:
             print(f"  [{i}/{len(to_update)}] URN {urn}: no grade found")
-        time.sleep(1.0)  # be polite to Snobe
+
+        time.sleep(1.0)
+
     return df
 
 
@@ -143,8 +140,6 @@ def main():
     print("📂 Loading master file…")
 
     master = pd.read_csv(MASTER_FILE)
-    if "URN" not in master.columns:
-        raise RuntimeError("Master file must contain a 'URN' column.")
     master["URN"] = pd.to_numeric(master["URN"], errors="coerce").astype("Int64")
 
     print("📡 Fetching latest DfE admissions…")
@@ -157,5 +152,28 @@ def main():
     for col in ["PAN", "Apps Received 2025"]:
         dfe_col = f"{col}_DfE"
         if dfe_col in merged.columns:
-            merged[col] = merged[dfe_col].fillna(merged.get(col))
-            merged.drop(columns
+            merged[col] = merged[dfe_col].fillna(merged[col] if col in merged else 0)
+            merged.drop(columns=[dfe_col], inplace=True)
+
+    # Clean numeric again
+    merged["PAN"] = pd.to_numeric(merged["PAN"], errors="coerce").fillna(0).astype(int)
+    merged["Apps Received 2025"] = pd.to_numeric(
+        merged["Apps Received 2025"], errors="coerce"
+    ).fillna(0).astype(int)
+
+    print("📊 Computing oversubscription ratios…")
+    merged["Oversub Ratio"] = (
+        merged["Apps Received 2025"] / merged["PAN"].replace(0, 1) * 100
+    ).round(0).astype(int)
+
+    print("🏅 Updating Snobe ratings (fast mode)…")
+    merged = update_snobe_grades(merged)
+
+    print(f"💾 Saving updated file → {OUTPUT_FILE}")
+    merged.to_csv(OUTPUT_FILE, index=False)
+
+    print("🎉 FULL UPDATE COMPLETE")
+
+
+if __name__ == "__main__":
+    main()
