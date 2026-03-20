@@ -38,6 +38,13 @@ def is_catholic(row):
 def load_data():
     df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 
+    # Normalise postcode column
+    if "Postcode" in df.columns:
+        df.rename(columns={"Postcode": "postcode"}, inplace=True)
+    if "postcode" not in df.columns:
+        df["postcode"] = ""
+    df["postcode"] = df["postcode"].astype(str).str.upper().str.replace(" ", "")
+
     df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
     df = df.drop_duplicates(subset=["URN"], keep="first")
     df = df[df.apply(is_catholic, axis=1)]
@@ -48,7 +55,7 @@ def load_data():
     df["PAN 2025"] = df["PAN 2025"].replace(0, 1)
     df["Oversub Ratio"] = ((df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100).round(0).astype(int)
 
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "postcode"]:
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase"]:
         if col not in df.columns:
             df[col] = ""
 
@@ -97,14 +104,10 @@ def imd_label(decile):
         d = int(decile)
     except:
         return "No IMD data"
-    if d <= 2:
-        return "Very deprived (bottom 20%)"
-    if d <= 4:
-        return "More deprived than average"
-    if d <= 7:
-        return "Around average"
-    if d <= 9:
-        return "Less deprived than average"
+    if d <= 2: return "Very deprived (bottom 20%)"
+    if d <= 4: return "More deprived than average"
+    if d <= 7: return "Around average"
+    if d <= 9: return "Less deprived than average"
     return "Very affluent (top 10%)"
 
 # ========================================
@@ -122,14 +125,10 @@ def fetch_crime_count(lat, lon, date="2024-01"):
         return None
 
 def crime_label(count):
-    if count is None:
-        return "No crime data"
-    if count < 50:
-        return "Low recorded crime"
-    if count < 150:
-        return "Moderate recorded crime"
-    if count < 300:
-        return "High recorded crime"
+    if count is None: return "No crime data"
+    if count < 50: return "Low recorded crime"
+    if count < 150: return "Moderate recorded crime"
+    if count < 300: return "High recorded crime"
     return "Very high recorded crime"
 
 # ========================================
