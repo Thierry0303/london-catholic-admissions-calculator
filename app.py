@@ -16,47 +16,25 @@ FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-adm
 
 @st.cache_data
 def load_data():
-    # Load from local if present, otherwise from GitHub
     if os.path.exists(FULL_PATH):
         df = pd.read_csv(FULL_PATH)
     else:
         df = pd.read_csv(FULL_GITHUB)
 
-    # Ensure URN is numeric and usable for dedupe
-    df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
-
-    # --- Catholic-only filter (if column exists) ---
-    rel_col = None
-    for cand in ["ReligiousCharacter", "Religious Character", "Religious character"]:
-        if cand in df.columns:
-            rel_col = cand
-            break
-    if rel_col is not None:
-        df = df[df[rel_col].astype(str).str.contains("Catholic", case=False, na=False)]
-
-    # --- Deduplicate by URN (one row per school) ---
-    if "URN" in df.columns:
-        df = df.sort_values("School Name").drop_duplicates(subset=["URN"], keep="first")
-
-    # Core numerics
     df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
-    df["PAN"] = df["PAN"].replace(0, 1)
-    df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"]) * 100
+    df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
 
-    # Ensure optional columns exist
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "Postcode", "Local Authority"]:
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Clean website URLs
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
         lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
-    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -123,6 +101,7 @@ CRIME_CATEGORY_LABELS = {
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def get_latest_crime_month() -> str:
+    """Asks the police API what the latest available month is."""
     import urllib.request, json
     try:
         req = urllib.request.Request(
@@ -135,10 +114,15 @@ def get_latest_crime_month() -> str:
             return dates[0]["date"]
     except Exception:
         pass
-    return "2025-10"
+    return "2025-10"  # safe fallback
 
 
 def _make_polygon(lat: float, lon: float, radius_km: float = 0.5, points: int = 6) -> str:
+    """
+    Generates a lat:lng polygon string around a centre point.
+    Used by the police API to search a proper area instead of snapping to
+    the nearest road (which often returns 0 results).
+    """
     R = 6371.0
     coords = []
     for i in range(points):
@@ -151,6 +135,10 @@ def _make_polygon(lat: float, lon: float, radius_km: float = 0.5, points: int = 
 
 @st.cache_data(show_spinner=False, ttl=86400)
 def fetch_crime(lat: float, lon: float):
+    """
+    Fetches street-level crimes in a 500m polygon from data.police.uk.
+    Returns (dict {label: count, 'total': n}, month_str) or (None, error_str).
+    """
     import urllib.request, json
     month = get_latest_crime_month()
     poly = _make_polygon(lat, lon, radius_km=0.5)
@@ -203,6 +191,7 @@ def fetch_imd(postcode: str):
 
 
 def imd_label(decile: int):
+    """Returns (text description, colour hex) for an IMD decile."""
     if decile <= 2:   return "Most deprived area (decile {})".format(decile), "#B71C1C"
     if decile <= 4:   return "Below average (decile {})".format(decile),      "#E65100"
     if decile <= 6:   return "Average area (decile {})".format(decile),        "#F9A825"
@@ -211,7 +200,7 @@ def imd_label(decile: int):
 
 
 # ========================================
-#  LIKELIHOOD CALCULATOR (kept for future use)
+#  LIKELIHOOD CALCULATOR
 # ========================================
 def calculate_likelihood(row, baptised, church_attendance, sibling):
     priority_score = 0
@@ -243,10 +232,7 @@ def chance_explanation(row, baptised, church_attendance, sibling):
     else:
         parts.append("non-Catholic (+5 pts)")
     oversub = row["Oversub Ratio"]
-    parts.append(
-        f"school is {oversub}% subscribed ({oversub - 100:+d}% vs places available)"
-        if oversub > 100 else f"school has spare capacity ({oversub}% subscribed)"
-    )
+    parts.append(f"school is {oversub}% subscribed ({oversub - 100:+d}% vs places available)" if oversub > 100 else f"school has spare capacity ({oversub}% subscribed)")
     return " • ".join(parts)
 
 
@@ -277,6 +263,7 @@ st.markdown("""
 with st.sidebar:
     st.header("🔍 Search")
 
+    # --- Postcode first ---
     postcode_query = st.text_input("Your postcode (e.g. SW6 1AA)", placeholder="SW6 1AA", value=_qp_postcode)
     max_distance_km = st.slider("Max distance (km)", 1, 20, 5, disabled=(not postcode_query))
 
@@ -309,14 +296,9 @@ with st.sidebar:
 # ========================================
 filtered = merged.copy()
 
-# UI-level dedupe: one row per URN
-if "URN" in filtered.columns:
-    filtered = filtered.sort_values("School Name").drop_duplicates(subset=["URN"], keep="first")
-
+# Postcode-based distance filter
 home_lat, home_lon = None, None
 distance_warning = None
-
-# Postcode-based distance filter
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
     if home_lat is None:
@@ -338,17 +320,17 @@ if not postcode_query and selected_borough != "All boroughs":
 # Phase filter
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 
-# Flag schools with no admissions data
+# Fix 2: Flag schools with no admissions data
 filtered = filtered.copy()
-filtered["_no_data"] = (filtered["Apps Received 2025"] == 0) & (filtered["PAN"] == 1)
+filtered["_no_data"] = (filtered["Apps Received 2025"] == 0) & (filtered["PAN"] == 0)
 
-# Default sort
+# Default sort: by distance if postcode active, otherwise by oversubscription
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)", ascending=True)
 else:
     filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
 
-# Update URL query params
+# Update URL query params for shareability
 st.query_params.update({
     "postcode":  postcode_query or "",
     "borough":   selected_borough if selected_borough != "All boroughs" else "",
@@ -370,22 +352,19 @@ elif baptised:
 else:
     st.warning("Non-Catholic places are very limited")
 
+# Distance warning
 if distance_warning:
     st.warning(distance_warning)
 
 # ========================================
-#  SUMMARY STATS BAR + TOP 10
+#  SUMMARY STATS BAR
 # ========================================
 if len(filtered) > 0:
-    data_schools = filtered[~filtered["_no_data"]].copy()
-    data_schools = data_schools.sort_values("Oversub Ratio", ascending=False).drop_duplicates(subset=["URN"])
-
+    data_schools = filtered[~filtered["_no_data"]]
     avg_oversub = int(data_schools["Oversub Ratio"].mean()) if len(data_schools) else 0
+    best_chance = 0  # unused, kept for compatibility
     n = len(filtered)
-    location_label = (
-        f"within {max_distance_km}km of {postcode_query.upper()}"
-        if postcode_query and home_lat else selected_borough or "All boroughs"
-    )
+    location_label = f"within {max_distance_km}km of {postcode_query.upper()}" if postcode_query and home_lat else selected_borough
 
     col_a, col_b = st.columns(2)
     col_a.metric("Schools found", n)
@@ -395,13 +374,12 @@ if len(filtered) > 0:
     col_b.metric("Avg applications per place", avg_ratio_str)
     st.caption(f"Results for: **{location_label}**  •  Last updated: March 2025")
 
-    # Top 10 most competitive (deduped)
+    # Top 10 most competitive
     if len(data_schools) >= 3:
         with st.expander("🏆 Most competitive schools (by oversubscription)"):
             top10 = (
                 data_schools[data_schools["Oversub Ratio"] > 100]
                 .sort_values("Oversub Ratio", ascending=False)
-                .drop_duplicates(subset=["URN"])
                 .head(10)
                 .reset_index(drop=True)
             )
@@ -446,7 +424,7 @@ if len(filtered) > 0:
 st.divider()
 
 # ========================================
-#  MAP TOGGLE (deduped + coords only)
+#  MAP TOGGLE
 # ========================================
 if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
     show_map = st.toggle("🗺️ Show map", value=False)
@@ -454,9 +432,6 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
         import folium
         from streamlit_folium import st_folium
         map_data = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
-        if "URN" in map_data.columns:
-            map_data = map_data.drop_duplicates(subset=["URN"])
-
         if home_lat and home_lon:
             centre_lat, centre_lon = home_lat, home_lon
             zoom = 13 if max_distance_km <= 3 else 12 if max_distance_km <= 7 else 11
@@ -464,7 +439,6 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
             centre_lat = map_data["Latitude"].mean()
             centre_lon = map_data["Longitude"].mean()
             zoom = 11
-
         m = folium.Map(location=[centre_lat, centre_lon], zoom_start=zoom, tiles="CartoDB positron")
         for _, row in map_data.iterrows():
             if row["_no_data"]:
@@ -490,7 +464,7 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
                 popup=folium.Popup(f"<b>{row['School Name']}</b><br>{chance_str}", max_width=200),
                 tooltip=row["School Name"],
             ).add_to(m)
-
+        # key forces re-render when filters change
         map_key = f"map_{postcode_query}_{selected_borough}_{child_stage}_{len(map_data)}"
         st_folium(m, width="100%", height=450, returned_objects=[], key=map_key)
         st.caption("🟢 Lower demand  🟠 Moderate  🔴 Very high demand  🔵 Places available  ⚫ No data")
@@ -508,6 +482,7 @@ if len(filtered) == 0:
     else:
         st.info("No schools match your current filters. Try selecting a different borough or phase.")
 else:
+    # ── Sort control — left: count, right: sort dropdown ──
     count_col, sort_col = st.columns([3, 2])
     with sort_col:
         sort_options = ["Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
@@ -515,6 +490,7 @@ else:
             sort_options = ["Distance (nearest first)"] + sort_options
         sort_by = st.selectbox("↕️ Sort by", sort_options, label_visibility="visible")
 
+    # Apply sort
     OFSTED_ORDER = {"Outstanding": 0, "Good": 1, "Requires Improvement": 2, "Inadequate": 3, "Awaiting": 4}
     SNOBE_ORDER  = {"A+": 0, "A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "": 99}
 
@@ -595,6 +571,7 @@ else:
                         )
                         st.caption(f"{ratio_str} apps:places · Catholics prioritised")
 
+            # How calculated
             with st.expander("ℹ️ About these figures"):
                 st.caption(
                     f"**{school['Apps Received 2025']:.0f} applications** were made for **{school['PAN']} places** in 2025. "
@@ -603,6 +580,7 @@ else:
                     f"The oversubscription ratio reflects all applicants, not just Catholics."
                 )
 
+            # Neighbourhood context (crime + IMD)
             has_coords = pd.notna(school.get("Latitude")) and pd.notna(school.get("Longitude"))
             has_postcode = pd.notna(school.get("Postcode")) and str(school.get("Postcode", "")).strip()
             if has_coords or has_postcode:
@@ -613,6 +591,7 @@ else:
                     )
                     c_left, c_right = st.columns(2)
 
+                    # --- IMD ---
                     with c_left:
                         st.markdown("**Deprivation (IMD)**")
                         if has_postcode:
@@ -625,11 +604,14 @@ else:
                                     unsafe_allow_html=True
                                 )
                                 st.caption("1 = most deprived · 10 = least deprived in England")
+                                if imd_data.get("score"):
+                                    st.caption(f"IMD score: {imd_data['score']}")
                             else:
                                 st.caption("IMD data loading…")
                         else:
                             st.caption("No postcode available.")
 
+                    # --- Crime ---
                     with c_right:
                         st.markdown("**Crime (500 m radius)**")
                         if has_coords:
@@ -656,3 +638,55 @@ else:
                 st.caption(f"📞 {school['Phone']}")
 
             st.markdown("---")
+
+# ========================================
+#  DOWNLOAD
+# ========================================
+if len(filtered) > 0:
+    csv = filtered.to_csv(index=False).encode()
+    label = postcode_query.upper() if postcode_query else selected_borough.replace(" ", "_")
+    st.download_button(
+        "⬇️ Download Results (CSV)",
+        csv,
+        f"{label}_Catholic_Schools_2025.csv",
+        "text/csv"
+    )
+
+# ========================================
+#  TOP 10 CHART
+# ========================================
+with st.expander("📊 Top 10 Most Oversubscribed London Catholic Schools"):
+    top10 = merged.nlargest(10, "Oversub Ratio")[["School Name", "Oversub Ratio"]]
+    st.bar_chart(top10.set_index("School Name")["Oversub Ratio"])
+
+# ========================================
+#  SNOBE EXPLANATION FOOTNOTE
+# ========================================
+st.divider()
+st.markdown(
+    '<div style="text-align:center;margin-bottom:8px">'
+    '<a href="#top" style="background:#0055a5;color:white;padding:8px 20px;'
+    'border-radius:20px;text-decoration:none;font-size:0.9rem;">⬆️ Back to top</a>'
+    '</div>',
+    unsafe_allow_html=True
+)
+st.caption("Built with love by a London parent • 2025 admissions data • Mobile-ready")
+with st.expander("ℹ️ About this data"):
+    st.markdown(
+        "**Snobe grade** — Independent rating of school quality (separate from Ofsted). "
+        "See [snobe.co.uk](https://snobe.co.uk) for methodology.\n\n"
+        "**IMD (Deprivation)** — England's official Index of Multiple Deprivation by area. "
+        "Decile 1 = most deprived 10% of areas in England; Decile 10 = least deprived. "
+        "Source: MHCLG 2019.\n\n"
+        "**Crime data** — Street-level incidents within ~500 m of the school postcode, "
+        "sourced from [data.police.uk](https://data.police.uk). "
+        "Reflects the surrounding area, not the school itself.\n\n"
+        "**Oversubscription** — Based on first-preference applications received in the 2025 admissions round. "
+        "Schools may fill remaining places through second/third preference applicants.\n\n"
+        "**Faith priority** — Catholic schools prioritise baptised Catholics. The oversubscription ratio "
+        "includes all applicants; non-Catholics rarely receive offers at oversubscribed Catholic schools. "
+        "Check each school's admissions policy for the exact criteria order."
+    )
+
+# ========================================
+
