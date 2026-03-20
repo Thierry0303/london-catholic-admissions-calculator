@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import numpy as np
 import math
+import urllib.parse
 
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
@@ -13,29 +14,50 @@ st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
 
+CATHOLIC_PATTERNS = ["catholic", "roman catholic", "rc", "r.c.", "cath"]
+RELIGION_COLS = [
+    "ReligiousCharacter_DfE",
+    "ReligiousCharacter",
+    "ReligiousCharacter (name)"
+]
+
+def is_catholic(row):
+    # Religious character columns
+    for col in RELIGION_COLS:
+        if col in row and isinstance(row[col], str):
+            val = row[col].lower()
+            if any(p in val for p in CATHOLIC_PATTERNS):
+                return True
+    # School name
+    if isinstance(row.get("School Name"), str):
+        name = row["School Name"].lower()
+        if any(p in name for p in CATHOLIC_PATTERNS):
+            return True
+    return False
+
 @st.cache_data
 def load_data():
-    # Load CSV
     df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 
-    # Ensure URN is numeric
+    # Ensure URN numeric
     df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
 
-    # --- GLOBAL DEDUPE (critical fix) ---
+    # --- GLOBAL DEDUPE ---
     df = df.drop_duplicates(subset=["URN"], keep="first")
+
+    # Catholic-only filter
+    df = df[df.apply(is_catholic, axis=1)]
 
     # Clean numerics
     df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
 
-    # Avoid division by zero
     df["PAN"] = df["PAN"].replace(0, 1)
-
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"]) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
 
     # Ensure optional columns exist
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "Postcode"]:
         if col not in df.columns:
             df[col] = ""
 
@@ -85,7 +107,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
@@ -194,10 +216,17 @@ if len(filtered) > 0 and {"Latitude","Longitude"}.issubset(filtered.columns):
         m = folium.Map(location=[centre_lat, centre_lon], zoom_start=12, tiles="CartoDB positron")
 
         for _, row in map_data.iterrows():
+            colour = (
+                "gray" if row["_no_data"]
+                else "blue" if row["Oversub Ratio"] < 100
+                else "green" if row["Oversub Ratio"] < 130
+                else "orange" if row["Oversub Ratio"] < 200
+                else "red"
+            )
             folium.CircleMarker(
                 location=[row["Latitude"], row["Longitude"]],
                 radius=8,
-                color="red" if row["Oversub Ratio"]>=100 else "blue",
+                color=colour,
                 fill=True,
                 fill_opacity=0.8,
                 tooltip=row["School Name"],
@@ -212,7 +241,28 @@ if len(filtered)==0:
     st.markdown("### 🔍 No schools found")
 else:
     st.markdown(f"### {len(filtered)} schools found")
+
     for _, school in filtered.iterrows():
-        st.markdown(f"**{school['School Name']}** — {school['Local Authority']}")
+        st.markdown(f"## {school['School Name']} — {school['Local Authority']}")
         st.caption(f"{school['Apps Received 2025']} apps for {school['PAN']} places")
+
+        # Oversubscription badge
+        oversub = school["Oversub Ratio"]
+        if oversub < 100:
+            st.success("Low demand")
+        elif oversub < 130:
+            st.info("Moderate demand")
+        elif oversub < 200:
+            st.warning("High demand")
+        else:
+            st.error("Very high demand")
+
+        # Ratings
+        st.caption(f"Ofsted: {school['Ofsted Badge']}")
+        st.caption(f"Snobe: {school['Snobe Overall Grade']}")
+
+        # Website
+        if pd.notna(school["School Website"]):
+            st.markdown(f"[School website]({school['School Website']})")
+
         st.markdown("---")
