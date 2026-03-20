@@ -15,6 +15,9 @@ LONDON_BOROUGHS = [
 ]
 
 
+# ============================================================
+#  FETCH LATEST DFE ADMISSIONS (EES 2025/26)
+# ============================================================
 def fetch_latest_dfe_admissions() -> pd.DataFrame:
     CSV_URL = (
         "https://content.explore-education-statistics.service.gov.uk/api/releases/"
@@ -32,20 +35,37 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
         "times_put_as_any_preferred_school": "Any Pref Apps 2025",
         "total_number_places_offered": "Places Offered 2025 (DfE proxy)",
     }
-
     df = df.rename(columns=rename_map)
 
-    df["Local Authority"] = df["Local Authority"].astype(str).str.strip()
+    # Filter to London
+    df["Local Authority"] = df["Local Authority"].astype(str).strip()
     df = df[df["Local Authority"].isin(LONDON_BOROUGHS)]
 
+    # Clean numerics
     df["URN"] = pd.to_numeric(df["URN"], errors="coerce").astype("Int64")
     for col in ["1st Pref Apps 2025", "Any Pref Apps 2025", "Places Offered 2025 (DfE proxy)"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
-    print(f"✅ DfE data ready: {len(df):,} London schools")
-    return df[["URN", "Local Authority", "1st Pref Apps 2025", "Any Pref Apps 2025", "Places Offered 2025 (DfE proxy)"]]
+    print(f"📌 Before dedupe: {len(df):,} rows")
+
+    # ============================================================
+    #  NEW: Deduplicate DfE rows by URN
+    # ============================================================
+    df = df.sort_values("1st Pref Apps 2025", ascending=False)
+    df = df.drop_duplicates(subset=["URN"], keep="first")
+
+    print(f"📌 After dedupe: {len(df):,} unique URNs")
+
+    return df[[
+        "URN", "Local Authority",
+        "1st Pref Apps 2025", "Any Pref Apps 2025",
+        "Places Offered 2025 (DfE proxy)"
+    ]]
 
 
+# ============================================================
+#  SNOBE SCRAPER
+# ============================================================
 def fetch_snobe_grade(urn: int) -> str | None:
     url = f"https://snobe.co.uk/schools/{urn}"
     try:
@@ -64,7 +84,12 @@ def fetch_snobe_grade(urn: int) -> str | None:
 def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
     if "Snobe Overall Grade" not in df.columns:
         df["Snobe Overall Grade"] = ""
-    to_update = df[df["Snobe Overall Grade"].astype(str).str.strip().isin(["", "nan", "NaN"]) & df["URN"].notna()]
+
+    to_update = df[
+        df["Snobe Overall Grade"].astype(str).str.strip().isin(["", "nan", "NaN"])
+        & df["URN"].notna()
+    ]
+
     if to_update.empty:
         print("ℹ️ Snobe grades already up to date")
         return df
@@ -76,9 +101,13 @@ def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
             df.loc[row.name, "Snobe Overall Grade"] = grade
             print(f"  [{i}/{len(to_update)}] URN {row['URN']}: {grade}")
         time.sleep(1)
+
     return df
 
 
+# ============================================================
+#  MAIN UPDATE PIPELINE
+# ============================================================
 def main():
     print("🔧 Starting regular data refresh...")
 
@@ -91,6 +120,12 @@ def main():
     print("🔗 Merging fresh DfE data...")
     merged = master.merge(dfe, on="URN", how="left", suffixes=("", "_DfE"))
 
+    # ============================================================
+    #  NEW: Deduplicate merged rows by URN
+    # ============================================================
+    merged = merged.sort_values("1st Pref Apps 2025", ascending=False)
+    merged = merged.drop_duplicates(subset=["URN"], keep="first")
+
     # Prefer DfE fresh values
     for col in ["1st Pref Apps 2025", "Any Pref Apps 2025", "Places Offered 2025 (DfE proxy)"]:
         dfe_col = f"{col}_DfE"
@@ -98,32 +133,30 @@ def main():
             merged[col] = merged[dfe_col].combine_first(merged.get(col, 0))
             merged.drop(columns=[dfe_col], inplace=True)
 
-    # Fill numerics safely
+    # Clean numerics
     merged["1st Pref Apps 2025"] = merged["1st Pref Apps 2025"].fillna(0).astype(int)
     merged["Any Pref Apps 2025"] = merged["Any Pref Apps 2025"].fillna(0).astype(int)
 
-    # Oversubscription ratio — FIXED for NaN/inf
+    # Oversubscription ratio
     pan_safe = merged["PAN 2025"].fillna(1).replace(0, 1).astype(float)
-    ratio = (merged["1st Pref Apps 2025"] / pan_safe) * 100
-    merged["Oversub Ratio"] = ratio.round(0).fillna(0).astype(int)
+    merged["Oversub Ratio"] = ((merged["1st Pref Apps 2025"] / pan_safe) * 100).round(0).astype(int)
 
-    print("📊 Oversubscription ratios updated (using 1st-pref apps + master PAN 2025)")
+    print("📊 Oversubscription ratios updated")
 
-    # Debug: match rate + examples
+    # Debug: match rate
     matched = (merged["1st Pref Apps 2025"] > 0).sum()
-    print(f"✅ {matched} of {len(merged)} schools received fresh 2025 DfE 1st-pref data")
-
-    # Check popular schools
-    examples = merged[merged["URN"].isin([137157, 149297])]  # Oratory & St Richard Reynolds
-    if not examples.empty:
-        print("\n🔍 Popular schools check:")
-        print(examples[["School Name", "1st Pref Apps 2025", "PAN 2025", "Oversub Ratio"]].to_string(index=False))
+    print(f"✅ {matched} of {len(merged)} schools received fresh 2025 DfE data")
 
     merged = update_snobe_grades(merged)
 
+    # ============================================================
+    #  NEW: Final dedupe before saving
+    # ============================================================
+    merged = merged.drop_duplicates(subset=["URN"])
+
     merged.to_csv(OUTPUT_FILE, index=False)
     print(f"💾 Saved updated file → {OUTPUT_FILE}")
-    print("🎉 Refresh complete! Ratios should now reflect real demand.")
+    print("🎉 Refresh complete! Clean, deduped, accurate data.")
 
 
 if __name__ == "__main__":
