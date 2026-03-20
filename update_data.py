@@ -16,27 +16,17 @@ LONDON_BOROUGHS = [
 
 
 def fetch_latest_dfe_admissions() -> pd.DataFrame:
-    """
-    Fetch DfE school-level applications/offers CSV (2025/26).
-    Uses 'times_put_as_any_preferred_school' for total apps.
-    Uses 'total_number_places_offered' as proxy for PAN/places.
-    Filters to London + Roman Catholic.
-    """
     CSV_URL = (
         "https://content.explore-education-statistics.service.gov.uk/api/releases/"
         "5ed40264-1835-4848-a29b-446ed6c075c2/files/7c9894e4-9038-4213-823c-bf50bc993cec"
     )
 
-    print("⬇️ Downloading DfE admissions CSV (2025/26 entry)...")
+    print("⬇️ Downloading DfE admissions CSV (2025/26)...")
     print(f"    {CSV_URL}")
 
     df = pd.read_csv(CSV_URL, low_memory=False)
     print(f"✅ Loaded {len(df):,} rows")
 
-    # Debug: show columns immediately
-    print("Columns in raw CSV:", df.columns.tolist())
-
-    # Exact mappings based on known dataset
     rename_map = {
         "school_urn": "URN",
         "la_name": "Local Authority",
@@ -45,46 +35,27 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
         "times_put_as_any_preferred_school": "Apps Received 2025",
     }
 
-    # Check if all source columns exist
-    missing_sources = [src for src in rename_map if src not in df.columns]
-    if missing_sources:
-        print("\nMissing source columns:", missing_sources)
-        print("Available columns:", sorted(df.columns.tolist()))
-        raise RuntimeError("Required columns missing from CSV. Update rename_map.")
+    missing = [src for src in rename_map if src not in df.columns]
+    if missing:
+        print("Missing columns:", missing)
+        raise ValueError("CSV changed - update rename_map.")
 
-    # Rename
     df = df.rename(columns=rename_map)
 
-    # Debug: confirm after rename
-    print("Columns after rename:", df.columns.tolist())
-    if "Local Authority" not in df.columns or "URN" not in df.columns:
-        raise RuntimeError("'Local Authority' or 'URN' missing after rename — check mapping.")
-
-    # Filter London boroughs
     df["Local Authority"] = df["Local Authority"].astype(str).str.strip()
-    print("Unique LAs before filter:", df["Local Authority"].unique()[:10])  # debug
     df = df[df["Local Authority"].isin(LONDON_BOROUGHS)]
-    print(f"Rows after LA filter: {len(df):,}")
 
-    df["ReligiousCharacter"] = df["ReligiousCharacter"].astype(str).str.strip()
-    print("Sample ReligiousCharacter values:")
-    print(df["ReligiousCharacter"].head(10))
-    print(df["ReligiousCharacter"].value_counts().head(15))
+    # NO Catholic filter here — dataset doesn't distinguish; rely on master CSV
+    # (Uncomment below if you ever want broad faith schools)
+    # df = df[df["ReligiousCharacter"].str.strip() == "Faith"]
 
-    # Try broad then narrow
-    catholic_mask = df["ReligiousCharacter"].str.lower().str.contains("catholic")
-    print(f"Rows matching broad 'catholic': {catholic_mask.sum()}")
-    
-    df = df[catholic_mask]
-
-    # Clean numerics
     df["URN"] = pd.to_numeric(df["URN"], errors="coerce").astype("Int64")
     df["Places Offered 2025"] = pd.to_numeric(df["Places Offered 2025"], errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"], errors="coerce").fillna(0).astype(int)
     df = df.dropna(subset=["URN"])
 
-    print(f"✅ Final filtered London RC schools: {len(df):,}")
-    return df[["URN", "Local Authority", "Places Offered 2025", "Apps Received 2025", "ReligiousCharacter"]]
+    print(f"✅ DfE data prepared: {len(df):,} London schools (all faiths)")
+    return df[["URN", "Local Authority", "Places Offered 2025", "Apps Received 2025"]]
 
 
 def fetch_snobe_grade(urn: int) -> str | None:
@@ -99,25 +70,25 @@ def fetch_snobe_grade(urn: int) -> str | None:
             if f"Overall Grade {token}" in text or f"Overall grade {token}" in text:
                 return token
         return None
-    except Exception:
+    except:
         return None
 
 
 def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
     if "Snobe Overall Grade" not in df.columns:
         df["Snobe Overall Grade"] = ""
-    mask_missing = df["Snobe Overall Grade"].astype(str).str.strip().isin(["", "nan", "NaN"])
-    to_update = df[mask_missing & df["URN"].notna()].copy()
+    mask = df["Snobe Overall Grade"].astype(str).str.strip().isin(["", "nan", "NaN"])
+    to_update = df[mask & df["URN"].notna()]
     if to_update.empty:
-        print("ℹ️ No missing Snobe grades — skipping.")
+        print("ℹ️ No missing Snobe grades.")
         return df
 
-    print(f"🔎 Fetching Snobe grades for {len(to_update)} schools...")
-    for i, (idx, row) in enumerate(to_update.iterrows(), 1):
+    print(f"🔎 Fetching Snobe for {len(to_update)} schools...")
+    for i, (_, row) in enumerate(to_update.iterrows(), 1):
         urn = int(row["URN"])
         grade = fetch_snobe_grade(urn)
         if grade:
-            df.loc[idx, "Snobe Overall Grade"] = grade
+            df.loc[row.name, "Snobe Overall Grade"] = grade
             print(f"  [{i}/{len(to_update)}] URN {urn}: {grade}")
         else:
             print(f"  [{i}/{len(to_update)}] URN {urn}: not found")
@@ -126,40 +97,45 @@ def update_snobe_grades(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    print("🔧 Starting full data update...")
-    print("📂 Loading master file...")
+    print("🔧 Starting update...")
+    print("📂 Loading master...")
     master = pd.read_csv(MASTER_FILE)
     master["URN"] = pd.to_numeric(master["URN"], errors="coerce").astype("Int64")
-    # Debug master columns
     print("Master columns:", master.columns.tolist())
+    print(f"Master has {len(master)} schools (should be London Catholic only)")
 
-    print("📡 Fetching latest DfE admissions data...")
+    print("📡 Fetching DfE data...")
     dfe = fetch_latest_dfe_admissions()
 
-    print("🔗 Merging DfE data into master...")
-    merged = master.merge(dfe, on=["URN", "Local Authority"], how="left", suffixes=("", "_DfE"))
+    print("🔗 Merging on URN...")
+    merged = master.merge(dfe, on="URN", how="left", suffixes=("", "_DfE"))
 
-    # Prefer DfE values
+    # Prefer DfE fresh data where available
     for col in ["Places Offered 2025", "Apps Received 2025"]:
         dfe_col = f"{col}_DfE"
         if dfe_col in merged.columns:
-            merged[col] = merged[dfe_col].fillna(merged.get(col, 0))
+            merged[col] = merged[dfe_col].combine_first(merged.get(col, pd.NA))
             merged.drop(columns=[dfe_col], inplace=True)
 
-    merged["Places Offered 2025"] = pd.to_numeric(merged["Places Offered 2025"], errors="coerce").fillna(0).astype(int)
-    merged["Apps Received 2025"] = pd.to_numeric(merged["Apps Received 2025"], errors="coerce").fillna(0).astype(int)
+    # Fill missing numerics
+    merged["Places Offered 2025"] = pd.to_numeric(merged.get("Places Offered 2025", 0), errors="coerce").fillna(0).astype(int)
+    merged["Apps Received 2025"] = pd.to_numeric(merged.get("Apps Received 2025", 0), errors="coerce").fillna(0).astype(int)
 
-    print("📊 Computing oversubscription ratios...")
+    print("📊 Computing oversubscription...")
     merged["Oversub Ratio"] = (
-        (merged["Apps Received 2025"] / merged["Places Offered 2025"].replace(0, 1)) * 100
-    ).round(0).astype(int)
+        merged["Apps Received 2025"] / merged["Places Offered 2025"].replace(0, 1)
+    ) * 100
+    merged["Oversub Ratio"] = merged["Oversub Ratio"].round(0).astype(int)
 
-    print("🏅 Updating Snobe overall grades...")
+    # Optional: flag if DfE data was added
+    merged["DfE Data Updated"] = merged["Apps Received 2025"] > 0  # simplistic
+
+    print("🏅 Snobe grades...")
     merged = update_snobe_grades(merged)
 
-    print(f"💾 Saving updated file: {OUTPUT_FILE}")
+    print(f"💾 Saving {OUTPUT_FILE}")
     merged.to_csv(OUTPUT_FILE, index=False)
-    print("🎉 Update complete!")
+    print("🎉 Done! Check how many rows got new Apps/Places from DfE.")
 
 
 if __name__ == "__main__":
