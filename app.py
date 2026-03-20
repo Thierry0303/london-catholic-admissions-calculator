@@ -49,11 +49,11 @@ def load_data():
     df = df[df.apply(is_catholic, axis=1)]
 
     # Clean numerics
-    df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
+    df["PAN 2025"] = pd.to_numeric(df.get("PAN 2025"), errors="coerce").fillna(0).astype(int)
+    df["1st Pref Apps 2025"] = pd.to_numeric(df.get("1st Pref Apps 2025"), errors="coerce").fillna(0).astype(int)
 
-    df["PAN"] = df["PAN"].replace(0, 1)
-    df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"]) * 100
+    df["PAN 2025"] = df["PAN 2025"].replace(0, 1)
+    df["Oversub Ratio"] = (df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
 
     # Ensure optional columns exist
@@ -188,13 +188,73 @@ if not postcode_query and selected_borough != "All boroughs":
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 
 # --- Admissions data flag ---
-filtered["_no_data"] = (filtered["Apps Received 2025"] == 0)
+filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
 
 # --- Sort ---
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)")
 else:
     filtered = filtered.sort_values("Oversub Ratio")
+
+# ========================================
+#  SUMMARY BAR + TOP 10
+# ========================================
+if len(filtered) > 0:
+    data_schools = filtered[~filtered["_no_data"]].drop_duplicates(subset=["URN"])
+
+    col_a, col_b = st.columns(2)
+    col_a.metric("Schools found", len(filtered))
+
+    avg_apps = data_schools["1st Pref Apps 2025"].mean() if len(data_schools) else 0
+    avg_pan  = data_schools["PAN 2025"].mean() if len(data_schools) else 1
+    col_b.metric("Avg applications per place", f"{avg_apps/avg_pan:.1f}:1")
+
+    # --- TOP 10 ---
+    with st.expander("🏆 Most competitive schools (Top 10)"):
+        top10 = (
+            data_schools[data_schools["Oversub Ratio"] > 100]
+            .sort_values("Oversub Ratio", ascending=False)
+            .drop_duplicates(subset=["URN"])
+            .head(10)
+            .reset_index(drop=True)
+        )
+        top10.index += 1
+
+        rows_html = ""
+        for rank, row in top10.iterrows():
+            ratio = int(row["Oversub Ratio"])
+            apps  = int(row["1st Pref Apps 2025"])
+            pan   = int(row["PAN 2025"])
+            ratio_str = f"{apps}:{pan}"
+
+            if ratio >= 300:
+                bar_color = "#B71C1C"
+            elif ratio >= 200:
+                bar_color = "#E65100"
+            elif ratio >= 130:
+                bar_color = "#F9A825"
+            else:
+                bar_color = "#2E7D32"
+
+            bar_width = min(100, int((ratio / 600) * 100))
+
+            rows_html += f"""
+            <tr>
+              <td style='padding:6px 8px;font-weight:bold;color:#888;width:28px'>{rank}</td>
+              <td style='padding:6px 8px;'>
+                <span style='font-weight:600'>{row['School Name']}</span>
+                <span style='color:#888;font-size:0.85rem'> · {row['Local Authority']}</span>
+                <div style='background:#eee;border-radius:4px;height:6px;margin-top:4px;'>
+                  <div style='background:{bar_color};width:{bar_width}%;height:6px;border-radius:4px'></div>
+                </div>
+              </td>
+              <td style='padding:6px 8px;font-weight:bold;color:{bar_color};white-space:nowrap;text-align:right'>{ratio_str}</td>
+            </tr>"""
+
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;font-size:0.9rem'>{rows_html}</table>",
+            unsafe_allow_html=True
+        )
 
 # ========================================
 #  MAP
@@ -233,9 +293,10 @@ if len(filtered) > 0 and {"Latitude","Longitude"}.issubset(filtered.columns):
             ).add_to(m)
 
         st_folium(m, width="100%", height=450)
+        st.caption("🟢 Lower demand  🟠 Moderate  🔴 Very high demand  🔵 Places available  ⚫ No data")
 
 # ========================================
-#  RESULTS
+#  RESULTS LIST
 # ========================================
 if len(filtered)==0:
     st.markdown("### 🔍 No schools found")
@@ -244,9 +305,8 @@ else:
 
     for _, school in filtered.iterrows():
         st.markdown(f"## {school['School Name']} — {school['Local Authority']}")
-        st.caption(f"{school['Apps Received 2025']} apps for {school['PAN']} places")
+        st.caption(f"{school['1st Pref Apps 2025']} first preferences for {school['PAN 2025']} places")
 
-        # Oversubscription badge
         oversub = school["Oversub Ratio"]
         if oversub < 100:
             st.success("Low demand")
@@ -257,11 +317,9 @@ else:
         else:
             st.error("Very high demand")
 
-        # Ratings
         st.caption(f"Ofsted: {school['Ofsted Badge']}")
         st.caption(f"Snobe: {school['Snobe Overall Grade']}")
 
-        # Website
         if pd.notna(school["School Website"]):
             st.markdown(f"[School website]({school['School Website']})")
 
