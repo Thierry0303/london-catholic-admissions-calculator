@@ -66,11 +66,16 @@ def fetch_latest_dfe_admissions() -> pd.DataFrame:
     df = df[df["Local Authority"].isin(LONDON_BOROUGHS)]
     print(f"Rows after LA filter: {len(df):,}")
 
-    # Catholic filter
     df["ReligiousCharacter"] = df["ReligiousCharacter"].astype(str).str.strip()
-    catholic_mask = df["ReligiousCharacter"].str.contains("Roman Catholic|Catholic", case=False, na=False)
+    print("Sample ReligiousCharacter values:")
+    print(df["ReligiousCharacter"].head(10))
+    print(df["ReligiousCharacter"].value_counts().head(15))
+
+    # Try broad then narrow
+    catholic_mask = df["ReligiousCharacter"].str.lower().str.contains("catholic")
+    print(f"Rows matching broad 'catholic': {catholic_mask.sum()}")
+    
     df = df[catholic_mask]
-    print(f"Rows after Catholic filter: {len(df):,}")
 
     # Clean numerics
     df["URN"] = pd.to_numeric(df["URN"], errors="coerce").astype("Int64")
