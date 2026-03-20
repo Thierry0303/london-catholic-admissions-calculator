@@ -4,6 +4,7 @@ import os
 import numpy as np
 import math
 import urllib.parse
+import requests
 
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
@@ -82,6 +83,66 @@ def load_data():
 
     return df
 
+# ========================================
+#  IMD LOOKUP
+# ========================================
+@st.cache_data
+def load_imd_lookup():
+    if not os.path.exists("imd_lookup.csv"):
+        return pd.DataFrame(columns=["postcode", "imd_decile", "imd_score"])
+    imd = pd.read_csv("imd_lookup.csv")
+    imd["postcode"] = imd["postcode"].astype(str).str.upper().str.replace(" ", "")
+    return imd
+
+def fetch_imd_for_postcode(pc, imd_df):
+    if not isinstance(pc, str) or pc.strip() == "":
+        return None, None
+    clean = pc.upper().replace(" ", "")
+    match = imd_df[imd_df["postcode"] == clean]
+    if match.empty:
+        return None, None
+    row = match.iloc[0]
+    return row.get("imd_decile"), row.get("imd_score")
+
+def imd_label(decile):
+    try:
+        d = int(decile)
+    except:
+        return "No IMD data"
+    if d <= 2:
+        return "Very deprived (bottom 20%)"
+    if d <= 4:
+        return "More deprived than average"
+    if d <= 7:
+        return "Around average"
+    if d <= 9:
+        return "Less deprived than average"
+    return "Very affluent (top 10%)"
+
+# ========================================
+#  CRIME LOOKUP
+# ========================================
+@st.cache_data(show_spinner=False)
+def fetch_crime_count(lat, lon, date="2024-01"):
+    try:
+        url = f"https://data.police.uk/api/crimes-street/all-crime?lat={lat}&lng={lon}&date={date}"
+        resp = requests.get(url, timeout=5)
+        if resp.status_code != 200:
+            return None
+        return len(resp.json())
+    except:
+        return None
+
+def crime_label(count):
+    if count is None:
+        return "No crime data"
+    if count < 50:
+        return "Low recorded crime"
+    if count < 150:
+        return "Moderate recorded crime"
+    if count < 300:
+        return "High recorded crime"
+    return "Very high recorded crime"
 
 # ========================================
 #  POSTCODE → LAT/LNG
@@ -115,6 +176,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 #  LOAD DATA
 # ========================================
 merged = load_data()
+imd_df = load_imd_lookup()
 
 # ========================================
 #  QUERY PARAMS
@@ -319,6 +381,24 @@ else:
 
         st.caption(f"Ofsted: {school['Ofsted Badge']}")
         st.caption(f"Snobe: {school['Snobe Overall Grade']}")
+
+        # --- Neighbourhood context ---
+        with st.expander("🏘️ Neighbourhood context"):
+            pc = school.get("Postcode", "")
+            decile, score = fetch_imd_for_postcode(pc, imd_df)
+            st.write(f"**Deprivation (IMD):** {imd_label(decile)}")
+            if score is not None:
+                st.caption(f"IMD score: {score}")
+
+            lat = school.get("Latitude", None)
+            lon = school.get("Longitude", None)
+            if pd.notna(lat) and pd.notna(lon):
+                crime_count = fetch_crime_count(lat, lon)
+                st.write(f"**Crime:** {crime_label(crime_count)}")
+                if crime_count is not None:
+                    st.caption(f"Approx. monthly crimes within area: {crime_count}")
+            else:
+                st.write("No location data available for crime statistics.")
 
         if pd.notna(school["School Website"]):
             st.markdown(f"[School website]({school['School Website']})")
