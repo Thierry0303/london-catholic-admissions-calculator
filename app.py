@@ -7,46 +7,53 @@ import urllib.parse
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
-# ────────────────────────────────────────────────
+# ========================================
 # DATA LOADING & CLEANING
-# ────────────────────────────────────────────────
-FULL_PATH = "catholic_schools_with_pan_coords.csv"
-
+# ========================================
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv(FULL_PATH)
+        df = pd.read_csv("catholic_schools_with_pan_coords.csv")
     except FileNotFoundError:
-        st.error("CSV file not found. Please make sure catholic_schools_with_pan_coords.csv exists.")
+        st.error("CSV file not found. Make sure catholic_schools_with_pan_coords.csv is in the repo root.")
         st.stop()
 
-    # Standardize column names
-    col_map = {
-        '1st Pref Apps 2025': 'Apps Received 2025',     # prefer first prefs when available
-        'PAN 2025': 'PAN',
-    }
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    # Standardize column names (align with update_data.py)
+    if '1st Pref Apps 2025' in df.columns:
+        df['Apps Received 2025'] = df['1st Pref Apps 2025']
+    if 'PAN 2025' in df.columns:
+        df['PAN'] = df['PAN 2025']
 
-    # Force numeric types + safe defaults
-    df["PAN"] = pd.to_numeric(df.get("PAN", 0), errors="coerce").fillna(1).replace(0, 1).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025", 0), errors="coerce").fillna(0).astype(int)
+    # Safe numeric conversion
+    for col in ['PAN', 'Apps Received 2025']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+        else:
+            df[col] = 0  # create column with 0 if missing
 
-    # Calculate oversubscription safely
+    # Ensure PAN never zero for division
+    df['PAN'] = df['PAN'].replace(0, 1)
+
+    # Calculate oversub safely
     df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"]) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).fillna(0).astype(int)
 
+    # Flag no-data schools
+    df["_no_data"] = (df["Apps Received 2025"] == 0)
+
     # Fill missing optional columns
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade",
+                "Local Authority", "Postcode", "Phase", "School Name", "Latitude", "Longitude"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Clean website links
+    # Clean website
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
         lambda x: f"https://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
-    # Ofsted badge helper
+    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -56,29 +63,24 @@ def load_data():
         return "Awaiting"
     df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
 
-    # Capitalize borough names
-    if "Local Authority" in df.columns:
-        df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
-
-    # Flag schools with no meaningful admissions data
-    df["_no_data"] = (df["Apps Received 2025"] == 0)
+    # Capitalize borough
+    df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
 
     # Last update hint
     if 'Last Updated' in df.columns:
-        last_date = df['Last Updated'].max()
-        st.caption(f"📅 Data last auto-updated: {last_date}")
+        st.caption(f"📅 Data last auto-updated: {df['Last Updated'].max()}")
     else:
-        st.caption("Data auto-update active – last processed recently")
+        st.caption("Data processed recently")
 
     return df
 
 
 merged = load_data()
 
-# ────────────────────────────────────────────────
-# HELPER FUNCTIONS (unchanged parts kept minimal)
-# ────────────────────────────────────────────────
-
+# ========================================
+# HELPERS (postcode → lat/lon, distance)
+# ========================================
+@st.cache_data(show_spinner=False)
 def postcode_to_latlon(postcode: str):
     import urllib.request, json
     clean = postcode.strip().upper().replace(" ", "")
@@ -96,21 +98,20 @@ def postcode_to_latlon(postcode: str):
 
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-
-# ────────────────────────────────────────────────
-# SIDEBAR FILTERS
-# ────────────────────────────────────────────────
+# ========================================
+# SIDEBAR
+# ========================================
 with st.sidebar:
     st.header("🔍 Search")
-
     postcode_query = st.text_input("Your postcode (e.g. SW6 1AA)", "")
-    max_distance_km = st.slider("Max distance (km)", 1, 20, 5, disabled=(not postcode_query))
+    max_distance_km = st.slider("Max distance (km)", 1, 20, 5, disabled=not postcode_query)
 
     st.divider()
     st.subheader("Or filter by borough")
@@ -126,12 +127,12 @@ with st.sidebar:
         church_attendance = st.checkbox("Regular church attendance")
         sibling = st.checkbox("Sibling at school")
 
-# ────────────────────────────────────────────────
-# APPLY FILTERS
-# ────────────────────────────────────────────────
+# ========================================
+# FILTERING
+# ========================================
 filtered = merged.copy()
 
-# Phase filter
+# Phase
 primary_phases = ["Primary", "Middle deemed primary", "All-through"]
 secondary_phases = ["Secondary", "Middle deemed secondary", "All-through", "Not applicable"]
 if child_stage == "Primary":
@@ -139,7 +140,7 @@ if child_stage == "Primary":
 elif child_stage == "Secondary":
     filtered = filtered[filtered["Phase"].isin(secondary_phases)]
 
-# Distance filter
+# Distance
 home_lat, home_lon = None, None
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
@@ -150,31 +151,28 @@ if postcode_query:
         )
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
-# Borough filter (only if no postcode)
+# Borough (if no postcode filter active)
 if not postcode_query and selected_borough != "All boroughs":
     filtered = filtered[filtered["Local Authority"] == selected_borough]
 
-# ────────────────────────────────────────────────
+# ========================================
 # HEADER & SUMMARY
-# ────────────────────────────────────────────────
-st.markdown("""
-<h1 style="text-align:center; color:#0055a5;">✝️ London Catholic Schools 2025</h1>
-<p style="text-align:center; color:#444;">Real chances • Ofsted • Snobe • For parents</p>
-""", unsafe_allow_html=True)
+# ========================================
+st.title("✝️ London Catholic Schools 2025")
+st.caption("Real chances • Ofsted • Snobe • For parents")
 
 if len(filtered) == 0:
-    st.warning("No schools match your current filters.")
+    st.warning("No schools match your filters. Try widening distance or changing borough/phase.")
     st.stop()
 
-# Summary metrics
 col1, col2 = st.columns(2)
 col1.metric("Schools found", len(filtered))
 avg_ratio = (filtered["Apps Received 2025"] / filtered["PAN"]).mean()
-col2.metric("Average apps per place", f"{avg_ratio:.1f}:1" if not pd.isna(avg_ratio) else "—")
+col2.metric("Avg apps per place", f"{avg_ratio:.1f}:1" if not pd.isna(avg_ratio) else "—")
 
-# ────────────────────────────────────────────────
-# RESULTS – CARDS
-# ────────────────────────────────────────────────
+# ========================================
+# RESULTS CARDS
+# ========================================
 for _, school in filtered.iterrows():
     with st.container(border=True):
         col1, col2 = st.columns([4, 1])
@@ -184,8 +182,8 @@ for _, school in filtered.iterrows():
             name_link = f"[{school['School Name']}]({website})" if website.strip() else school['School Name']
             st.markdown(f"**{name_link}** • {school['Phase']}")
 
-            loc = f"{school['Postcode']} • {school['Local Authority']}"
-            if "Distance (km)" in school and pd.notna(school["Distance (km)"]):
+            loc = f"{school.get('Postcode', '')} • {school.get('Local Authority', '')}"
+            if "Distance (km)" in school and pd.notna(school.get("Distance (km)")):
                 loc += f" • {school['Distance (km)']} km"
             st.caption(loc)
 
@@ -193,7 +191,7 @@ for _, school in filtered.iterrows():
             pan = int(school["PAN"])
             ratio_pct = int(school["Oversub Ratio"])
 
-            st.caption(f"**{apps} : {pan}**  ({apps} applications for {pan} places)")
+            st.caption(f"**{apps} : {pan}**  ({apps} apps for {pan} places)")
 
             badges = []
             if school.get("Snobe Overall Grade"):
@@ -204,8 +202,8 @@ for _, school in filtered.iterrows():
                 st.caption(" • ".join(badges))
 
         with col2:
-            # ── Demand badge logic ──
-            if apps == 0 or pan <= 1:
+            # Demand badge – FIXED logic
+            if school["_no_data"] or apps == 0:
                 color = "#9E9E9E"
                 label = "No data"
             elif ratio_pct < 100:
@@ -237,16 +235,13 @@ for _, school in filtered.iterrows():
                 ">{label}</div>""",
                 unsafe_allow_html=True
             )
-
             st.caption(f"{ratio_pct}% oversubscribed")
 
         with st.expander("About these figures"):
             st.caption(
-                f"In 2025, **{apps}** families listed this school among their preferences "
-                f"for **{pan}** places. Catholic schools prioritise baptised Catholics — "
-                "the ratio includes all applicants."
+                f"In 2025, **{apps}** families listed this school for **{pan}** places. "
+                "Ratio includes all applicants; Catholic schools prioritise baptised Catholics."
             )
 
 st.divider()
-
-st.caption("Data: DfE 2025 admissions • Snobe • Ofsted • Built for London parents • March 2026")
+st.caption("Data: DfE 2025 • Snobe • Ofsted • Built for London parents • March 2026")
