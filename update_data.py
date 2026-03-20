@@ -3,7 +3,6 @@ import pandas as pd
 import os
 import numpy as np
 import math
-import urllib.parse
 import requests
 
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
@@ -24,13 +23,11 @@ RELIGION_COLS = [
 ]
 
 def is_catholic(row):
-    # Religious character columns
     for col in RELIGION_COLS:
         if col in row and isinstance(row[col], str):
             val = row[col].lower()
             if any(p in val for p in CATHOLIC_PATTERNS):
                 return True
-    # School name
     if isinstance(row.get("School Name"), str):
         name = row["School Name"].lower()
         if any(p in name for p in CATHOLIC_PATTERNS):
@@ -41,35 +38,25 @@ def is_catholic(row):
 def load_data():
     df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 
-    # Ensure URN numeric
     df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
-
-    # --- GLOBAL DEDUPE ---
     df = df.drop_duplicates(subset=["URN"], keep="first")
-
-    # Catholic-only filter
     df = df[df.apply(is_catholic, axis=1)]
 
-    # Clean numerics
     df["PAN 2025"] = pd.to_numeric(df.get("PAN 2025"), errors="coerce").fillna(0).astype(int)
     df["1st Pref Apps 2025"] = pd.to_numeric(df.get("1st Pref Apps 2025"), errors="coerce").fillna(0).astype(int)
 
     df["PAN 2025"] = df["PAN 2025"].replace(0, 1)
-    df["Oversub Ratio"] = (df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100
-    df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
+    df["Oversub Ratio"] = ((df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100).round(0).astype(int)
 
-    # Ensure optional columns exist
     for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "postcode"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Clean website URLs
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
         lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
-    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -92,7 +79,6 @@ def load_imd_lookup():
     if not os.path.exists(IMD_PATH):
         return pd.DataFrame(columns=["postcode", "imd_decile", "imd_score"])
     imd = pd.read_csv(IMD_PATH)
-    # Normalise postcode format
     imd["postcode"] = imd["postcode"].astype(str).str.upper().str.replace(" ", "")
     return imd
 
@@ -104,14 +90,12 @@ def fetch_imd_for_postcode(pc, imd_df):
     if match.empty:
         return None, None
     row = match.iloc[0]
-    decile = row.get("imd_decile", None)
-    score = row.get("imd_score", None)
-    return decile, score
+    return row.get("imd_decile"), row.get("imd_score")
 
 def imd_label(decile):
     try:
         d = int(decile)
-    except (TypeError, ValueError):
+    except:
         return "No IMD data"
     if d <= 2:
         return "Very deprived (bottom 20%)"
@@ -124,7 +108,7 @@ def imd_label(decile):
     return "Very affluent (top 10%)"
 
 # ========================================
-#  CRIME LOOKUP (UK Police API)
+#  CRIME LOOKUP
 # ========================================
 @st.cache_data(show_spinner=False)
 def fetch_crime_count(lat, lon, date="2024-01"):
@@ -133,9 +117,8 @@ def fetch_crime_count(lat, lon, date="2024-01"):
         resp = requests.get(url, timeout=5)
         if resp.status_code != 200:
             return None
-        data = resp.json()
-        return len(data)
-    except Exception:
+        return len(resp.json())
+    except:
         return None
 
 def crime_label(count):
@@ -163,7 +146,7 @@ def postcode_to_latlon(postcode: str):
         if data.get("status") == 200:
             r = data["result"]
             return r["latitude"], r["longitude"]
-    except Exception:
+    except:
         pass
     return None, None
 
@@ -229,11 +212,8 @@ with st.sidebar:
 #  APPLY FILTERS
 # ========================================
 filtered = merged.copy()
-
-# --- UI-level dedupe ---
 filtered = filtered.drop_duplicates(subset=["URN"], keep="first")
 
-# --- Postcode filter ---
 home_lat, home_lon = None, None
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
@@ -245,17 +225,12 @@ if postcode_query:
         )
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
-# --- Borough filter ---
 if not postcode_query and selected_borough != "All boroughs":
     filtered = filtered[filtered["Local Authority"] == selected_borough]
 
-# --- Phase filter ---
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
-
-# --- Admissions data flag ---
 filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
 
-# --- Sort ---
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)")
 else:
@@ -274,7 +249,6 @@ if len(filtered) > 0:
     avg_pan  = data_schools["PAN 2025"].mean() if len(data_schools) else 1
     col_b.metric("Avg applications per place", f"{avg_apps/avg_pan:.1f}:1")
 
-    # --- TOP 10 ---
     with st.expander("🏆 Most competitive schools (Top 10)"):
         top10 = (
             data_schools[data_schools["Oversub Ratio"] > 100]
@@ -385,12 +359,11 @@ else:
         st.caption(f"Ofsted: {school['Ofsted Badge']}")
         st.caption(f"Snobe: {school['Snobe Overall Grade']}")
 
-        # --- Neighbourhood context (IMD + crime) ---
+        # --- Neighbourhood context ---
         with st.expander("🏘️ Neighbourhood context"):
             pc = school.get("postcode", "")
             decile, score = fetch_imd_for_postcode(pc, imd_df)
-            imd_text = imd_label(decile)
-            st.write(f"**Deprivation (IMD):** {imd_text}")
+            st.write(f"**Deprivation (IMD):** {imd_label(decile)}")
             if score is not None:
                 st.caption(f"IMD score: {score}")
 
