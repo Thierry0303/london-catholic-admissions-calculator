@@ -23,13 +23,11 @@ RELIGION_COLS = [
 ]
 
 def is_catholic(row):
-    # Religious character columns
     for col in RELIGION_COLS:
         if col in row and isinstance(row[col], str):
             val = row[col].lower()
             if any(p in val for p in CATHOLIC_PATTERNS):
                 return True
-    # School name
     if isinstance(row.get("School Name"), str):
         name = row["School Name"].lower()
         if any(p in name for p in CATHOLIC_PATTERNS):
@@ -40,16 +38,10 @@ def is_catholic(row):
 def load_data():
     df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 
-    # Ensure URN numeric
     df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
-
-    # --- GLOBAL DEDUPE ---
     df = df.drop_duplicates(subset=["URN"], keep="first")
-
-    # Catholic-only filter
     df = df[df.apply(is_catholic, axis=1)]
 
-    # Clean numerics
     df["PAN 2025"] = pd.to_numeric(df.get("PAN 2025"), errors="coerce").fillna(0).astype(int)
     df["1st Pref Apps 2025"] = pd.to_numeric(df.get("1st Pref Apps 2025"), errors="coerce").fillna(0).astype(int)
 
@@ -57,18 +49,15 @@ def load_data():
     df["Oversub Ratio"] = (df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
 
-    # Ensure optional columns exist
     for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "Postcode"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Clean website URLs
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
         lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
-    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -109,14 +98,10 @@ def imd_label(decile):
         d = int(decile)
     except:
         return "No IMD data"
-    if d <= 2:
-        return "Very deprived (bottom 20%)"
-    if d <= 4:
-        return "More deprived than average"
-    if d <= 7:
-        return "Around average"
-    if d <= 9:
-        return "Less deprived than average"
+    if d <= 2: return "Very deprived (bottom 20%)"
+    if d <= 4: return "More deprived than average"
+    if d <= 7: return "Around average"
+    if d <= 9: return "Less deprived than average"
     return "Very affluent (top 10%)"
 
 # ========================================
@@ -134,14 +119,10 @@ def fetch_crime_count(lat, lon, date="2024-01"):
         return None
 
 def crime_label(count):
-    if count is None:
-        return "No crime data"
-    if count < 50:
-        return "Low recorded crime"
-    if count < 150:
-        return "Moderate recorded crime"
-    if count < 300:
-        return "High recorded crime"
+    if count is None: return "No crime data"
+    if count < 50: return "Low recorded crime"
+    if count < 150: return "Moderate recorded crime"
+    if count < 300: return "High recorded crime"
     return "Very high recorded crime"
 
 # ========================================
@@ -162,7 +143,6 @@ def postcode_to_latlon(postcode: str):
         pass
     return None, None
 
-
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -171,6 +151,46 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+# ========================================
+#  COMPOSITE SCORE
+# ========================================
+def compute_composite_score(row):
+    score = 0
+
+    # Distance
+    if "Distance (km)" in row and not pd.isna(row["Distance (km)"]):
+        score += row["Distance (km)"] * 2
+
+    # Snobe
+    snobe_order = {"A+":1, "A":2, "B":3, "C":4, "D":5, "E":6}
+    score += snobe_order.get(row.get("Snobe Overall Grade"), 10) * 10
+
+    # Ofsted
+    ofsted_order = {
+        "Outstanding": 1,
+        "Good": 2,
+        "Requires Improvement": 3,
+        "Inadequate": 4,
+        "Awaiting": 5
+    }
+    score += ofsted_order.get(row.get("Ofsted Badge"), 5) * 8
+
+    # Oversubscription
+    score += row.get("Oversub Ratio", 200) / 5
+
+    # IMD (less deprived better → higher decile better)
+    try:
+        imd = int(row.get("imd_decile", 5))
+    except:
+        imd = 5
+    score += (11 - imd) * 3
+
+    # Crime
+    crime = row.get("crime_count", None)
+    if crime is not None:
+        score += crime / 20
+
+    return score
 
 # ========================================
 #  LOAD DATA
@@ -222,15 +242,28 @@ with st.sidebar:
     church_attendance = st.checkbox("Regular church attendance", _qp_attend)
     sibling = st.checkbox("Sibling at school", _qp_sibling)
 
+    st.divider()
+    st.subheader("Sort results")
+    sort_option = st.selectbox(
+        "Sort by",
+        [
+            "Distance (nearest first)",
+            "Snobe grade (best first)",
+            "Ofsted rating (best first)",
+            "Oversubscription (lowest first)",
+            "School name (A–Z)",
+            "Multi‑criteria (best overall)"
+        ]
+    )
+
+    show_best_school = st.checkbox("Show best school within distance", value=True)
+
 # ========================================
 #  APPLY FILTERS
 # ========================================
 filtered = merged.copy()
-
-# --- UI-level dedupe ---
 filtered = filtered.drop_duplicates(subset=["URN"], keep="first")
 
-# --- Postcode filter ---
 home_lat, home_lon = None, None
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
@@ -242,21 +275,55 @@ if postcode_query:
         )
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
-# --- Borough filter ---
 if not postcode_query and selected_borough != "All boroughs":
     filtered = filtered[filtered["Local Authority"] == selected_borough]
 
-# --- Phase filter ---
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
-
-# --- Admissions data flag ---
 filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
 
-# --- Sort ---
-if postcode_query and home_lat and "Distance (km)" in filtered.columns:
-    filtered = filtered.sort_values("Distance (km)")
-else:
-    filtered = filtered.sort_values("Oversub Ratio")
+# Precompute IMD + crime for scoring
+filtered["imd_decile"] = filtered["Postcode"].apply(lambda pc: fetch_imd_for_postcode(pc, imd_df)[0])
+
+def safe_crime(row):
+    lat, lon = row.get("Latitude"), row.get("Longitude")
+    if pd.notna(lat) and pd.notna(lon):
+        return fetch_crime_count(lat, lon)
+    return None
+
+filtered["crime_count"] = filtered.apply(safe_crime, axis=1)
+filtered["composite_score"] = filtered.apply(compute_composite_score, axis=1)
+
+# ========================================
+#  APPLY SORTING
+# ========================================
+if sort_option == "Distance (nearest first)":
+    if "Distance (km)" in filtered.columns:
+        filtered = filtered.sort_values("Distance (km)", ascending=True)
+
+elif sort_option == "Snobe grade (best first)":
+    grade_order = {"A+":1, "A":2, "B":3, "C":4, "D":5, "E":6}
+    filtered["snobe_sort"] = filtered["Snobe Overall Grade"].map(grade_order).fillna(999)
+    filtered = filtered.sort_values("snobe_sort", ascending=True)
+
+elif sort_option == "Ofsted rating (best first)":
+    ofsted_order = {
+        "Outstanding": 1,
+        "Good": 2,
+        "Requires Improvement": 3,
+        "Inadequate": 4,
+        "Awaiting": 5
+    }
+    filtered["ofsted_sort"] = filtered["Ofsted Badge"].map(ofsted_order).fillna(999)
+    filtered = filtered.sort_values("ofsted_sort", ascending=True)
+
+elif sort_option == "Oversubscription (lowest first)":
+    filtered = filtered.sort_values("Oversub Ratio", ascending=True)
+
+elif sort_option == "School name (A–Z)":
+    filtered = filtered.sort_values("School Name", ascending=True)
+
+elif sort_option == "Multi‑criteria (best overall)":
+    filtered = filtered.sort_values("composite_score", ascending=True)
 
 # ========================================
 #  SUMMARY BAR + TOP 10
@@ -271,7 +338,6 @@ if len(filtered) > 0:
     avg_pan  = data_schools["PAN 2025"].mean() if len(data_schools) else 1
     col_b.metric("Avg applications per place", f"{avg_apps/avg_pan:.1f}:1")
 
-    # --- TOP 10 ---
     with st.expander("🏆 Most competitive schools (Top 10)"):
         top10 = (
             data_schools[data_schools["Oversub Ratio"] > 100]
@@ -358,6 +424,113 @@ if len(filtered) > 0 and {"Latitude","Longitude"}.issubset(filtered.columns):
         st.caption("🟢 Lower demand  🟠 Moderate  🔴 Very high demand  🔵 Places available  ⚫ No data")
 
 # ========================================
+#  BEST SCHOOL WITHIN X KM + COMPARISON
+# ========================================
+if show_best_school and postcode_query and "Distance (km)" in filtered.columns:
+    nearby = filtered[filtered["Distance (km)"] <= max_distance_km]
+
+    if len(nearby) > 0:
+        best_school = nearby.sort_values("composite_score").iloc[0]
+
+        st.markdown("## 🎯 Best school within your distance")
+        st.success(
+            f"**{best_school['School Name']}**  \n"
+            f"{best_school['Local Authority']}  \n"
+            f"Distance: {best_school['Distance (km)']} km  \n"
+            f"Ofsted: {best_school['Ofsted Badge']}  \n"
+            f"Snobe: {best_school['Snobe Overall Grade']}  \n"
+            f"Oversubscription: {best_school['Oversub Ratio']}%  \n"
+            f"IMD decile: {best_school['imd_decile']}  \n"
+            f"Crime count: {best_school['crime_count']}"
+        )
+
+        # WHY THIS SCHOOL IS RECOMMENDED
+        reasons = []
+
+        if "Distance (km)" in best_school and not pd.isna(best_school["Distance (km)"]):
+            if best_school["Distance (km)"] <= 1:
+                reasons.append("It is very close to your home.")
+            elif best_school["Distance (km)"] <= 3:
+                reasons.append("It is within a short travel distance.")
+
+        ofsted = best_school.get("Ofsted Badge", "")
+        if ofsted == "Outstanding":
+            reasons.append("It has an Outstanding Ofsted rating.")
+        elif ofsted == "Good":
+            reasons.append("It has a strong Good Ofsted rating.")
+
+        snobe = best_school.get("Snobe Overall Grade", "")
+        if snobe in ["A+", "A"]:
+            reasons.append("It has an excellent Snobe grade.")
+        elif snobe == "B":
+            reasons.append("It has a solid Snobe grade.")
+
+        oversub = best_school.get("Oversub Ratio", 200)
+        if oversub < 100:
+            reasons.append("It is not heavily oversubscribed.")
+        elif oversub < 130:
+            reasons.append("It has moderate competition for places.")
+
+        imd = best_school.get("imd_decile", None)
+        if imd is not None:
+            try:
+                imd_int = int(imd)
+                if imd_int >= 8:
+                    reasons.append("It is located in a relatively affluent area.")
+                elif imd_int <= 3:
+                    reasons.append("It serves a more deprived community, which may offer additional support programmes.")
+            except:
+                pass
+
+        crime = best_school.get("crime_count", None)
+        if crime is not None:
+            if crime < 50:
+                reasons.append("It is in a low‑crime neighbourhood.")
+            elif crime < 150:
+                reasons.append("It is in an area with moderate crime levels.")
+
+        st.markdown("### 📝 Why this school is recommended")
+        if len(reasons) > 0:
+            for r in reasons:
+                st.markdown(f"- {r}")
+        else:
+            st.markdown("This school scored highly across multiple criteria in your selected radius.")
+
+        # COMPARISON TABLE (TOP 3)
+        if len(nearby) > 1:
+            top3 = nearby.sort_values("composite_score").head(3)
+
+            st.markdown("### 📊 Compare top schools within your distance")
+
+            comparison_df = top3[[
+                "School Name",
+                "Distance (km)",
+                "Ofsted Badge",
+                "Snobe Overall Grade",
+                "Oversub Ratio",
+                "imd_decile",
+                "crime_count",
+                "composite_score"
+            ]].rename(columns={
+                "School Name": "School",
+                "Ofsted Badge": "Ofsted",
+                "Snobe Overall Grade": "Snobe",
+                "Oversub Ratio": "Oversub (%)",
+                "imd_decile": "IMD decile",
+                "crime_count": "Crime",
+                "composite_score": "Score"
+            })
+
+            st.dataframe(
+                comparison_df.style.format({
+                    "Distance (km)": "{:.1f}",
+                    "Oversub (%)": "{:.0f}",
+                    "Score": "{:.1f}"
+                }),
+                use_container_width=True
+            )
+
+# ========================================
 #  RESULTS LIST
 # ========================================
 if len(filtered)==0:
@@ -382,7 +555,7 @@ else:
         st.caption(f"Ofsted: {school['Ofsted Badge']}")
         st.caption(f"Snobe: {school['Snobe Overall Grade']}")
 
-        # --- Neighbourhood context ---
+        # Neighbourhood context
         with st.expander("🏘️ Neighbourhood context"):
             pc = school.get("Postcode", "")
             decile, score = fetch_imd_for_postcode(pc, imd_df)
@@ -393,7 +566,9 @@ else:
             lat = school.get("Latitude", None)
             lon = school.get("Longitude", None)
             if pd.notna(lat) and pd.notna(lon):
-                crime_count = fetch_crime_count(lat, lon)
+                crime_count = school.get("crime_count", None)
+                if crime_count is None:
+                    crime_count = fetch_crime_count(lat, lon)
                 st.write(f"**Crime:** {crime_label(crime_count)}")
                 if crime_count is not None:
                     st.caption(f"Approx. monthly crimes within area: {crime_count}")
