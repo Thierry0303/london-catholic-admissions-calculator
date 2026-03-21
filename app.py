@@ -208,6 +208,52 @@ with st.sidebar:
 # ========================================
 # FILTERS + CRASH-PROOF DISTANCE
 # ========================================
+# -------------------------------
+# BEST MATCH WEIGHTED SCORING
+# -------------------------------
+
+st.subheader("Best Match Weighting")
+
+# User-adjustable weights
+W_IMD = st.slider("Weight: IMD (lower deprivation is better)", 0.0, 1.0, 0.25)
+W_CRIME = st.slider("Weight: Crime (lower crime is better)", 0.0, 1.0, 0.25)
+W_ACADEMIC = st.slider("Weight: Academic strength (oversubscription)", 0.0, 1.0, 0.25)
+W_DISTANCE = st.slider("Weight: Distance (closer is better)", 0.0, 1.0, 0.25)
+
+# Normalisation helper
+def normalise(series):
+    if series.max() == series.min():
+        return series * 0  # avoid divide-by-zero
+    return (series - series.min()) / (series.max() - series.min())
+
+# Normalise metrics
+filtered["norm_imd"] = normalise(filtered["IMD_rank"])
+filtered["norm_crime"] = normalise(filtered["Crime_index"])
+filtered["norm_distance"] = normalise(filtered["Distance (km)"])
+filtered["norm_oversub"] = normalise(filtered["Oversub Ratio"])
+
+# Invert metrics where lower = better
+filtered["norm_imd"] = 1 - filtered["norm_imd"]
+filtered["norm_crime"] = 1 - filtered["norm_crime"]
+filtered["norm_distance"] = 1 - filtered["norm_distance"]
+
+# Weighted score
+filtered["Best Match Score"] = (
+    W_IMD * filtered["norm_imd"] +
+    W_CRIME * filtered["norm_crime"] +
+    W_ACADEMIC * filtered["norm_oversub"] +
+    W_DISTANCE * filtered["norm_distance"]
+)
+
+# Sort by best match
+filtered = filtered.sort_values("Best Match Score", ascending=False)
+
+# Display best match
+top_school = filtered.iloc[0]
+st.success(
+    f"🏆 Best overall match: **{top_school['School Name']}** "
+    f"(Score: {top_school['Best Match Score']:.2f})"
+)
 filtered = merged.copy()
 filtered = filtered.drop_duplicates(subset=["URN"], keep="first")
 
