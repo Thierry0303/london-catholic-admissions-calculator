@@ -13,7 +13,7 @@ st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️"
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
 # ========================================
-# DATA LOADING (with manual overrides for accuracy)
+# DATA LOADING + OVERRIDES
 # ========================================
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
@@ -53,19 +53,11 @@ def load_data():
     df["PAN 2025"] = df["PAN 2025"].replace(0, 1)
     df["Oversub Ratio"] = ((df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100).round(0).astype(int)
     
-    # === MANUAL OVERRIDES – this fixes the data quality issues you mentioned ===
+    # MANUAL OVERRIDES (fixes data quality)
     overrides = {
-        148438: {  # St Joseph's Catholic Primary School, Kensington & Chelsea
-            "Ofsted Rating": "Outstanding",
-            "Ofsted Badge": "Outstanding"
-        },
-        100491: {  # The Oratory Roman Catholic Primary School
-            "1st Pref Apps 2025": 169,   # real 2025 first preferences
-            "Oversub Ratio": 563        # 169 / 30 = 563%
-        }
-        # Add more schools here in the future (e.g. other heavily oversubscribed ones)
+        148438: {"Ofsted Rating": "Outstanding", "Ofsted Badge": "Outstanding"},   # St Joseph's Kensington
+        100491: {"1st Pref Apps 2025": 169, "Oversub Ratio": 563}                 # The Oratory
     }
-    
     for urn, updates in overrides.items():
         mask = df["URN"] == urn
         if mask.any():
@@ -95,7 +87,7 @@ def load_data():
     return df
 
 # ========================================
-# IMD, CRIME, POSTCODE, HAVERSINE (unchanged)
+# HELPERS
 # ========================================
 @st.cache_data
 def load_imd_lookup():
@@ -160,24 +152,29 @@ def postcode_to_latlon(postcode: str):
     return None, None
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    if any(pd.isna(x) or x is None for x in [lat1, lon1, lat2, lon2]):
+        return None
+    try:
+        lat1, lon1, lat2, lon2 = float(lat1), float(lon1), float(lat2), float(lon2)
+        R = 6371
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    except:
+        return None
 
 # ========================================
-# LOAD DATA + BANNER
+# LOAD DATA + WARNING BANNER
 # ========================================
 merged = load_data()
 imd_df = load_imd_lookup()
 
-# === DATA QUALITY WARNING BANNER ===
-st.warning("⚠️ Data last refreshed March 2025. Ofsted ratings and 2025 admissions numbers are **manually corrected** for popular schools (e.g. St Joseph’s = Outstanding, The Oratory = highly oversubscribed). Real 2026 data coming soon.")
+st.warning("⚠️ Data last refreshed March 2025. Ofsted ratings and 2025 admissions numbers are **manually corrected** for popular schools (St Joseph’s = Outstanding, The Oratory = highly oversubscribed). Real 2026 data coming soon.")
 
 # ========================================
-# REST OF YOUR APP (exactly as you had it)
+# QUERY PARAMS + HEADER + SIDEBAR (your original)
 # ========================================
 params = st.query_params
 _qp_postcode = params.get("postcode", "")
@@ -210,29 +207,51 @@ with st.sidebar:
     church_attendance = st.checkbox("Regular church attendance", _qp_attend)
     sibling = st.checkbox("Sibling at school", _qp_sibling)
 
-# APPLY FILTERS (unchanged)
+# ========================================
+# FILTERS + CRASH-PROOF DISTANCE
+# ========================================
 filtered = merged.copy()
 filtered = filtered.drop_duplicates(subset=["URN"], keep="first")
+
 home_lat, home_lon = None, None
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
     if home_lat is not None:
+        # Fill missing coordinates
+        def fill_missing_coords(row):
+            if pd.isna(row.get("Latitude")) or pd.isna(row.get("Longitude")):
+                lat, lon = postcode_to_latlon(row.get("postcode", ""))
+                if lat is not None:
+                    return pd.Series([lat, lon])
+            return pd.Series([row.get("Latitude"), row.get("Longitude")])
+        
+        filtered[["Latitude", "Longitude"]] = filtered.apply(fill_missing_coords, axis=1)
+        filtered["Latitude"] = pd.to_numeric(filtered["Latitude"], errors="coerce")
+        filtered["Longitude"] = pd.to_numeric(filtered["Longitude"], errors="coerce")
         filtered = filtered.dropna(subset=["Latitude", "Longitude"])
-        filtered["Distance (km)"] = filtered.apply(
-            lambda r: round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1),
-            axis=1
-        )
+        
+        # CRASH-PROOF distance
+        def safe_distance(row):
+            d = haversine_km(home_lat, home_lon, row["Latitude"], row["Longitude"])
+            return round(d, 1) if d is not None else None
+        
+        filtered["Distance (km)"] = filtered.apply(safe_distance, axis=1)
+        filtered = filtered.dropna(subset=["Distance (km)"])
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
+
 if not postcode_query and selected_borough != "All boroughs":
     filtered = filtered[filtered["Local Authority"] == selected_borough]
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
+
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)")
 else:
     filtered = filtered.sort_values("Oversub Ratio")
 
-# SUMMARY BAR + TOP 10 (unchanged)
+# ========================================
+# SUMMARY + TOP 10 + MAP + RESULTS (your original code)
+# ========================================
 if len(filtered) > 0:
     data_schools = filtered[~filtered["_no_data"]].drop_duplicates(subset=["URN"])
     col_a, col_b = st.columns(2)
@@ -240,7 +259,9 @@ if len(filtered) > 0:
     avg_apps = data_schools["1st Pref Apps 2025"].mean() if len(data_schools) else 0
     avg_pan = data_schools["PAN 2025"].mean() if len(data_schools) else 1
     col_b.metric("Avg applications per place", f"{avg_apps/avg_pan:.1f}:1")
+    
     with st.expander("🏆 Most competitive schools (Top 10)"):
+        # (your original top 10 table code - unchanged)
         top10 = (
             data_schools[data_schools["Oversub Ratio"] > 100]
             .sort_values("Oversub Ratio", ascending=False)
@@ -274,24 +295,21 @@ if len(filtered) > 0:
             </tr>"""
         st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:0.9rem'>{rows_html}</table>", unsafe_allow_html=True)
 
-# MAP (unchanged)
+# MAP
 if len(filtered) > 0 and {"Latitude","Longitude"}.issubset(filtered.columns):
     show_map = st.toggle("🗺️ Show map", value=False)
     if show_map:
         map_data = filtered.dropna(subset=["Latitude","Longitude"]).drop_duplicates(subset=["URN"])
-        if home_lat and home_lon:
-            centre_lat, centre_lon = home_lat, home_lon
-        else:
-            centre_lat = map_data["Latitude"].mean()
-            centre_lon = map_data["Longitude"].mean()
+        centre_lat = home_lat if home_lat else map_data["Latitude"].mean()
+        centre_lon = home_lon if home_lon else map_data["Longitude"].mean()
         m = folium.Map(location=[centre_lat, centre_lon], zoom_start=12, tiles="CartoDB positron")
         for _, row in map_data.iterrows():
-            colour = ("gray" if row["_no_data"] else "blue" if row["Oversub Ratio"] < 100 else "green" if row["Oversub Ratio"] < 130 else "orange" if row["Oversub Ratio"] < 200 else "red")
+            colour = "gray" if row["_no_data"] else "blue" if row["Oversub Ratio"] < 100 else "green" if row["Oversub Ratio"] < 130 else "orange" if row["Oversub Ratio"] < 200 else "red"
             folium.CircleMarker(location=[row["Latitude"], row["Longitude"]], radius=8, color=colour, fill=True, fill_opacity=0.8, tooltip=row["School Name"]).add_to(m)
         st_folium(m, width="100%", height=450)
         st.caption("🟢 Lower demand 🟠 Moderate 🔴 Very high demand 🔵 Places available ⚫ No data")
 
-# RESULTS LIST (unchanged)
+# RESULTS LIST
 if len(filtered)==0:
     st.markdown("### 🔍 No schools found")
 else:
@@ -310,17 +328,19 @@ else:
             pc = school.get("postcode", "")
             decile, score = fetch_imd_for_postcode(pc, imd_df)
             st.write(f"**Deprivation (IMD):** {imd_label(decile)}")
-            if score is not None: st.caption(f"IMD score: {score}")
+            if score is not None:
+                st.caption(f"IMD score: {score}")
             lat = school.get("Latitude", None)
             lon = school.get("Longitude", None)
             if pd.notna(lat) and pd.notna(lon):
                 crime_count = fetch_crime_count(lat, lon)
                 st.write(f"**Crime:** {crime_label(crime_count)}")
-                if crime_count is not None: st.caption(f"Approx. monthly crimes within area: {crime_count}")
+                if crime_count is not None:
+                    st.caption(f"Approx. monthly crimes within area: {crime_count}")
             else:
                 st.write("No location data available for crime statistics.")
         if pd.notna(school["School Website"]):
             st.markdown(f"[School website]({school['School Website']})")
         st.markdown("---")
 
-st.caption("✅ St Joseph’s now shows **Outstanding** | The Oratory now shows high demand")
+st.caption("✅ St Joseph’s now shows Outstanding | The Oratory now shows high demand")
