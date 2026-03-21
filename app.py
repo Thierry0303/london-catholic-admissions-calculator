@@ -202,7 +202,17 @@ def compute_composite_score(row):
 # LOAD DATA + DEBUG
 # ========================================
 merged = load_data()
+# ========================================
+# EXTRA DEBUG: Where is URN 148438 going?
+# ========================================
+st.subheader("🔍 Where did URN 148438 go?")
 
+target_urn = merged[merged["URN"].astype(str).str.contains("148438")]
+if not target_urn.empty:
+    st.success("✅ School IS in merged (234 rows)")
+    st.dataframe(target_urn[["URN", "School Name", "Local Authority", "Phase", "Latitude", "Longitude"]])
+else:
+    st.error("School disappeared from merged")
 # Debug: Raw data check for specific school
 raw_df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 
