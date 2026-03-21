@@ -196,7 +196,21 @@ def compute_composite_score(row):
 #  LOAD DATA
 # ========================================
 merged = load_data()
-imd_df = load_imd_lookup()
+st.subheader("Debug: Master data after load & catholic filter")
+
+st.write("Total rows after catholic filter:", len(merged))
+
+st.write("Any St Joseph variants?")
+joseph_mask = merged["School Name"].str.contains("joseph|st.? ?jo", case=False, na=False, regex=True)
+st.dataframe(merged[joseph_mask][["URN", "School Name", "Local Authority", "Phase", "PAN 2025", "ReligiousCharacter_DfE"]].head(10))
+
+st.write("Missing lat/long count:", merged[["Latitude", "Longitude"]].isna().sum())
+
+st.write("Religion field top values:")
+for col in RELIGION_COLS:
+    if col in merged:
+        st.write(col, merged[col].value_counts().head(8))
+        imd_df = load_imd_lookup()
 
 # ========================================
 #  QUERY PARAMS
