@@ -171,8 +171,6 @@ def haversine_km(lat1, lon1, lat2, lon2):
 merged = load_data()
 imd_df = load_imd_lookup()
 
-st.warning("⚠️ Data last refreshed March 2025. Ofsted ratings and 2025 admissions numbers are **manually corrected** for popular schools (St Joseph’s = Outstanding, The Oratory = highly oversubscribed). Real 2026 data coming soon.")
-
 # ========================================
 # QUERY PARAMS + HEADER + SIDEBAR (your original)
 # ========================================
@@ -343,4 +341,3 @@ else:
             st.markdown(f"[School website]({school['School Website']})")
         st.markdown("---")
 
-st.caption("✅ St Joseph’s now shows Outstanding | The Oratory now shows high demand")
