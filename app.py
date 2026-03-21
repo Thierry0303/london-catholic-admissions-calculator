@@ -195,7 +195,8 @@ def compute_composite_score(row):
 # ========================================
 #  LOAD DATA
 # ========================================
-merged = load_data()raw_df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
+merged = load_data()
+    raw_df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
 st.subheader("Raw data check for URN 148438")
 target = raw_df[raw_df["URN"].astype(str).str.contains("148438")]
 if not target.empty:
