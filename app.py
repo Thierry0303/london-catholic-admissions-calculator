@@ -23,8 +23,7 @@ RELIGION_COLS = ["ReligiousCharacter_DfE", "ReligiousCharacter", "ReligiousChara
 def is_catholic(row):
     for col in RELIGION_COLS:
         if col in row and isinstance(row[col], str):
-            val = row[col].lower().strip()
-            if any(p in val for p in CATHOLIC_PATTERNS):
+            if any(p in row[col].lower().strip() for p in CATHOLIC_PATTERNS):
                 return True
     if "School Name" in row and isinstance(row["School Name"], str):
         name = row["School Name"].lower()
@@ -41,15 +40,19 @@ def load_data():
     df["URN"] = pd.to_numeric(df.get("URN"), errors="coerce").astype("Int64")
     df = df.drop_duplicates(subset=["URN"], keep="first")
     df = df[df.apply(is_catholic, axis=1)]
+    
     df["PAN 2025"] = pd.to_numeric(df.get("PAN 2025"), errors="coerce").fillna(0).astype(int)
     df["1st Pref Apps 2025"] = pd.to_numeric(df.get("1st Pref Apps 2025"), errors="coerce").fillna(0).astype(int)
     df["PAN 2025"] = df["PAN 2025"].replace(0, 1)
     df["Oversub Ratio"] = (df["1st Pref Apps 2025"] / df["PAN 2025"]) * 100
     df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
+    
     for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade", "Phase", "Postcode"]:
         if col not in df.columns: df[col] = ""
+    
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x)
+    
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -58,12 +61,13 @@ def load_data():
         if "Inadequate" in r: return "Inadequate"
         return "Awaiting"
     df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
+    
     if "Local Authority" in df.columns:
         df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
     return df
 
 # ========================================
-# HELPERS (IMD, Crime, Postcode, etc.)
+# HELPERS
 # ========================================
 @st.cache_data
 def load_imd_lookup():
@@ -102,6 +106,8 @@ def postcode_to_latlon(postcode: str):
     return None, None
 
 def haversine_km(lat1, lon1, lat2, lon2):
+    if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
+        return None
     R = 6371
     phi1 = math.radians(lat1); phi2 = math.radians(lat2)
     dphi = math.radians(lat2 - lat1); dlambda = math.radians(lon2 - lon1)
@@ -130,7 +136,7 @@ merged = load_data()
 imd_df = load_imd_lookup()
 
 # ========================================
-# SIDEBAR + FILTERS (your original UI)
+# SIDEBAR
 # ========================================
 params = st.query_params
 _qp_postcode = params.get("postcode", "")
@@ -159,24 +165,31 @@ with st.sidebar:
     show_best_school = st.checkbox("Show best school within distance", True)
 
 # ========================================
-# APPLY FILTERS + LAT/LONG FIX
+# FILTERS + SAFE DISTANCE CALCULATION
 # ========================================
 filtered = merged.copy()
 home_lat, home_lon = None, None
 
 if postcode_query:
     home_lat, home_lon = postcode_to_latlon(postcode_query)
-    if home_lat is not None:
-        # Fix for schools with missing coordinates (including St Joseph's)
+    if home_lat is not None and home_lon is not None:
+        # Fill missing school coordinates using their own postcode
         def fill_missing_coords(row):
             if pd.isna(row.get("Latitude")) or pd.isna(row.get("Longitude")):
                 lat, lon = postcode_to_latlon(row.get("Postcode", ""))
-                if lat is not None: return pd.Series([lat, lon])
+                if lat is not None:
+                    return pd.Series([lat, lon])
             return pd.Series([row.get("Latitude"), row.get("Longitude")])
-        filtered[["Latitude", "Longitude"]] = filtered.apply(fill_missing_coords, axis=1)
         
-        filtered = filtered.dropna(subset=["Latitude", "Longitude"])
-        filtered["Distance (km)"] = filtered.apply(lambda r: round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1), axis=1)
+        filtered[["Latitude", "Longitude"]] = filtered.apply(fill_missing_coords, axis=1)
+        filtered = filtered.dropna(subset=["Latitude", "Longitude"])  # ← extra safety
+        
+        # Safe distance calculation
+        filtered["Distance (km)"] = filtered.apply(
+            lambda r: round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1)
+            if pd.notna(r["Latitude"]) and pd.notna(r["Longitude"]) else None,
+            axis=1
+        )
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
 if not postcode_query and selected_borough != "All boroughs":
@@ -185,13 +198,13 @@ if not postcode_query and selected_borough != "All boroughs":
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
 filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
 
-# Precompute extra data
+# Extra columns
 filtered["imd_decile"] = filtered["Postcode"].apply(lambda pc: fetch_imd_for_postcode(pc, imd_df)[0])
 filtered["crime_count"] = filtered.apply(lambda row: fetch_crime_count(row.get("Latitude"), row.get("Longitude")) if pd.notna(row.get("Latitude")) else None, axis=1)
 filtered["composite_score"] = filtered.apply(compute_composite_score, axis=1)
 
 # ========================================
-# SORTING (fixed - no line break)
+# SORTING
 # ========================================
 if sort_option == "Distance (nearest first)" and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)", ascending=True)
@@ -211,7 +224,7 @@ elif sort_option == "Multi‑criteria (best overall)":
     filtered = filtered.sort_values("composite_score", ascending=True)
 
 # ========================================
-# DISPLAY RESULTS (your original layout)
+# RESULTS
 # ========================================
 if len(filtered) == 0:
     st.markdown("### 🔍 No schools found")
@@ -219,16 +232,16 @@ else:
     st.markdown(f"### {len(filtered)} schools found")
     for _, school in filtered.iterrows():
         st.markdown(f"## {school['School Name']} — {school['Local Authority']}")
-        st.caption(f"{school['1st Pref Apps 2025']} first preferences for {school['PAN 2025']} places")
-        oversub = school["Oversub Ratio"]
+        st.caption(f"{school.get('1st Pref Apps 2025', 0)} first preferences for {school.get('PAN 2025', 0)} places")
+        oversub = school.get("Oversub Ratio", 0)
         if oversub < 100: st.success("Low demand")
         elif oversub < 130: st.info("Moderate demand")
         elif oversub < 200: st.warning("High demand")
         else: st.error("Very high demand")
-        st.caption(f"Ofsted: {school['Ofsted Badge']}")
-        st.caption(f"Snobe: {school['Snobe Overall Grade']}")
-        if pd.notna(school["School Website"]):
+        st.caption(f"Ofsted: {school.get('Ofsted Badge', '')}")
+        st.caption(f"Snobe: {school.get('Snobe Overall Grade', '')}")
+        if pd.notna(school.get("School Website")):
             st.markdown(f"[School website]({school['School Website']})")
         st.markdown("---")
 
-st.caption("✅ St Joseph's Catholic Primary School (Cadogan Street) is now included")
+st.caption("✅ Fixed: St Joseph's Catholic Primary School now appears correctly")
