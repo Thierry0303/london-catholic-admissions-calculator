@@ -88,13 +88,20 @@ def postcode_to_latlon(postcode: str):
     return None, None
 
 def haversine_km(lat1, lon1, lat2, lon2):
-    if any(pd.isna(x) for x in [lat1, lon1, lat2, lon2]):
+    """Never crashes - returns None if any bad value"""
+    if any(pd.isna(x) or x is None for x in [lat1, lon1, lat2, lon2]):
         return None
-    R = 6371
-    phi1 = math.radians(lat1); phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1); dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    try:
+        lat1, lon1, lat2, lon2 = float(lat1), float(lon1), float(lat2), float(lon2)
+        R = 6371
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    except:
+        return None
 
 # ========================================
 # LOAD DATA
@@ -131,7 +138,7 @@ with st.sidebar:
     sort_option = st.selectbox("Sort by", ["Distance (nearest first)", "Snobe grade (best first)", "Ofsted rating (best first)", "Oversubscription (lowest first)", "School name (A–Z)", "Multi‑criteria (best overall)"])
 
 # ========================================
-# FILTERS + CRASH-PROOF DISTANCE
+# FILTERS + ULTRA-SAFE DISTANCE
 # ========================================
 filtered = merged.copy()
 
@@ -147,15 +154,19 @@ if postcode_query:
             return pd.Series([row.get("Latitude"), row.get("Longitude")])
         
         filtered[["Latitude", "Longitude"]] = filtered.apply(fill_missing_coords, axis=1)
-        filtered = filtered.dropna(subset=["Latitude", "Longitude"])   # final safety
-
-        # CRASH-PROOF distance calculation
+        
+        # FORCE numeric + remove any bad rows
+        filtered["Latitude"] = pd.to_numeric(filtered["Latitude"], errors="coerce")
+        filtered["Longitude"] = pd.to_numeric(filtered["Longitude"], errors="coerce")
+        filtered = filtered.dropna(subset=["Latitude", "Longitude"])
+        
+        # Safe distance
         def safe_distance(row):
             d = haversine_km(home_lat, home_lon, row["Latitude"], row["Longitude"])
             return round(d, 1) if d is not None else None
         
         filtered["Distance (km)"] = filtered.apply(safe_distance, axis=1)
-        filtered = filtered[filtered["Distance (km)"].notna()]          # remove any impossible rows
+        filtered = filtered.dropna(subset=["Distance (km)"])
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
 if not postcode_query and selected_borough != "All boroughs":
@@ -183,4 +194,4 @@ else:
             st.markdown(f"[School website]({school['School Website']})")
         st.markdown("---")
 
-st.caption("✅ St Joseph's Catholic Primary School (Kensington and Chelsea) is now visible!")
+st.caption("✅ St Joseph's Catholic Primary School is now visible!")
