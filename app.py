@@ -195,7 +195,13 @@ def compute_composite_score(row):
 # ========================================
 #  LOAD DATA
 # ========================================
-merged = load_data()
+merged = load_data()raw_df = pd.read_csv(FULL_PATH) if os.path.exists(FULL_PATH) else pd.read_csv(FULL_GITHUB)
+st.subheader("Raw data check for URN 148438")
+target = raw_df[raw_df["URN"].astype(str).str.contains("148438")]
+if not target.empty:
+    st.dataframe(target[["URN", "School Name", "Local Authority", "Phase", "ReligiousCharacter_DfE", "ReligiousCharacter", "ReligiousCharacter (name)"]])
+else:
+    st.warning("URN 148438 not found in raw CSV at all")
 st.subheader("Debug: Master data after load & catholic filter")
 
 st.write("Total rows after catholic filter:", len(merged))
