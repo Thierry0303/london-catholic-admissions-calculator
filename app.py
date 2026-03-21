@@ -10,7 +10,7 @@ import urllib.request
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 
 # ========================================
-# CONSTANTS
+# CONSTANTS & CATHOLIC FILTER
 # ========================================
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
@@ -129,10 +129,9 @@ with st.sidebar:
     sibling = st.checkbox("Sibling at school", False)
     st.divider()
     sort_option = st.selectbox("Sort by", ["Distance (nearest first)", "Snobe grade (best first)", "Ofsted rating (best first)", "Oversubscription (lowest first)", "School name (A–Z)", "Multi‑criteria (best overall)"])
-    show_best_school = st.checkbox("Show best school within distance", True)
 
 # ========================================
-# FILTERS + SAFE DISTANCE (this fixes the crash)
+# FILTERS + CRASH-PROOF DISTANCE
 # ========================================
 filtered = merged.copy()
 
@@ -148,22 +147,24 @@ if postcode_query:
             return pd.Series([row.get("Latitude"), row.get("Longitude")])
         
         filtered[["Latitude", "Longitude"]] = filtered.apply(fill_missing_coords, axis=1)
-        filtered = filtered.dropna(subset=["Latitude", "Longitude"])   # ← removes any remaining bad rows
+        filtered = filtered.dropna(subset=["Latitude", "Longitude"])   # final safety
+
+        # CRASH-PROOF distance calculation
+        def safe_distance(row):
+            d = haversine_km(home_lat, home_lon, row["Latitude"], row["Longitude"])
+            return round(d, 1) if d is not None else None
         
-        # SAFE distance calculation (never passes NaN to math)
-        filtered["Distance (km)"] = filtered.apply(
-            lambda r: round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1), axis=1
-        )
+        filtered["Distance (km)"] = filtered.apply(safe_distance, axis=1)
+        filtered = filtered[filtered["Distance (km)"].notna()]          # remove any impossible rows
         filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
 
 if not postcode_query and selected_borough != "All boroughs":
     filtered = filtered[filtered["Local Authority"] == selected_borough]
 
 filtered = filtered[filtered["Phase"].isin(selected_phase)]
-filtered["_no_data"] = (filtered["1st Pref Apps 2025"] == 0)
 
 # ========================================
-# RESULTS (simple version that works)
+# RESULTS
 # ========================================
 if len(filtered) == 0:
     st.markdown("### 🔍 No schools found")
@@ -171,8 +172,8 @@ else:
     st.markdown(f"### {len(filtered)} schools found")
     for _, school in filtered.iterrows():
         st.markdown(f"## {school['School Name']} — {school['Local Authority']}")
-        st.caption(f"{school.get('1st Pref Apps 2025', 0)} apps for {school.get('PAN 2025', 0)} places")
-        oversub = school.get("Oversub Ratio", 0)
+        st.caption(f"{int(school.get('1st Pref Apps 2025', 0))} apps for {int(school.get('PAN 2025', 0))} places")
+        oversub = int(school.get("Oversub Ratio", 0))
         if oversub < 100: st.success("Low demand")
         elif oversub < 130: st.info("Moderate demand")
         elif oversub < 200: st.warning("High demand")
@@ -182,4 +183,4 @@ else:
             st.markdown(f"[School website]({school['School Website']})")
         st.markdown("---")
 
-st.caption("✅ St Joseph's Catholic Primary School is now visible!")
+st.caption("✅ St Joseph's Catholic Primary School (Kensington and Chelsea) is now visible!")
