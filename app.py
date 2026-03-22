@@ -21,31 +21,39 @@ def load_data():
     else:
         df = pd.read_csv(FULL_GITHUB)
 
-    # Safe column alignment
+    # Clean column names
+    df.columns = df.columns.astype(str).str.strip()
+
+    # Try to align common column names
     if "1st Pref Apps 2025" in df.columns:
         df["Apps Received 2025"] = df["1st Pref Apps 2025"]
     if "PAN 2025" in df.columns:
         df["PAN"] = df["PAN 2025"]
 
+    # Safe numeric conversion
     df["PAN"] = pd.to_numeric(df.get("PAN", 1), errors="coerce").fillna(1).replace(0, 1).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025", 0), errors="coerce").fillna(0).astype(int)
 
-    # Safe ratio
+    # Safe oversubscription ratio
     ratio = df["Apps Received 2025"] / df["PAN"].astype(float)
     ratio = ratio.replace([np.inf, -np.inf], 0)
     df["Oversub Ratio"] = (ratio * 100).round(0).fillna(0).astype(int)
 
     df["_no_data"] = (df["Apps Received 2025"] == 0)
 
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
+    # Fill missing columns
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade",
+                "Local Authority", "Postcode", "Phase", "School Name", "Latitude", "Longitude"]:
         if col not in df.columns:
             df[col] = ""
 
+    # Clean website links
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
-        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
+        lambda x: f"https://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
+    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -55,9 +63,11 @@ def load_data():
         return "Awaiting"
     df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
 
+    # Normalise borough names
     if "Local Authority" in df.columns:
         df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
 
+    # Clean coordinates
     for col in ["Latitude", "Longitude"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -67,7 +77,7 @@ def load_data():
 merged = load_data()
 
 # ========================================
-# POSTCODE → LAT/LNG
+# HELPERS
 # ========================================
 @st.cache_data(show_spinner=False)
 def postcode_to_latlon(postcode: str):
@@ -95,8 +105,9 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+
 # ========================================
-# CRIME DATA (your original code)
+# CRIME DATA (full original implementation)
 # ========================================
 CRIME_CATEGORY_LABELS = {
     "anti-social-behaviour": "Antisocial behaviour",
@@ -116,7 +127,7 @@ CRIME_CATEGORY_LABELS = {
 }
 
 @st.cache_data(show_spinner=False, ttl=86400)
-def get_latest_crime_month() -> str:
+def get_latest_crime_month():
     import urllib.request, json
     try:
         req = urllib.request.Request(
@@ -129,7 +140,7 @@ def get_latest_crime_month() -> str:
             return dates[0]["date"]
     except Exception:
         pass
-    return "2025-10"  # safe fallback
+    return "2025-10"
 
 def _make_polygon(lat: float, lon: float, radius_km: float = 0.5, points: int = 6) -> str:
     R = 6371.0
@@ -192,45 +203,11 @@ def fetch_imd(postcode: str):
     return {"decile": max(1, int(float(decile)))}
 
 def imd_label(decile: int):
-    if decile <= 2: return "Most deprived area (decile {})".format(decile), "#B71C1C"
-    if decile <= 4: return "Below average (decile {})".format(decile), "#E65100"
-    if decile <= 6: return "Average area (decile {})".format(decile), "#F9A825"
-    if decile <= 8: return "Above average (decile {})".format(decile), "#558B2F"
-    return "Least deprived area (decile {})".format(decile), "#1B5E20"
-
-# ========================================
-# LIKELIHOOD CALCULATOR (your original)
-# ========================================
-def calculate_likelihood(row, baptised, church_attendance, sibling):
-    priority_score = 0
-    if sibling: priority_score += 40
-    if baptised and church_attendance: priority_score += 35
-    elif baptised: priority_score += 18
-    else: priority_score += 5
-    oversub = row["Oversub Ratio"]
-    if priority_score >= 70:
-        chance = max(15, 98 - (oversub - 100) * 0.25)
-    elif priority_score >= 50:
-        chance = max(8, 90 - (oversub - 100) * 0.6)
-    elif priority_score >= 20:
-        chance = max(3, 65 - oversub * 0.8)
-    else:
-        chance = max(1, 40 - oversub)
-    return min(100, round(chance, 1))
-
-def chance_explanation(row, baptised, church_attendance, sibling):
-    parts = []
-    if sibling:
-        parts.append("sibling priority (+40 pts)")
-    if baptised and church_attendance:
-        parts.append("practising Catholic (+35 pts)")
-    elif baptised:
-        parts.append("baptised but attendance not confirmed (+18 pts)")
-    else:
-        parts.append("non-Catholic (+5 pts)")
-    oversub = row["Oversub Ratio"]
-    parts.append(f"school is {oversub}% subscribed ({oversub - 100:+d}% vs places available)" if oversub > 100 else f"school has spare capacity ({oversub}% subscribed)")
-    return " • ".join(parts)
+    if decile <= 2: return f"Most deprived area (decile {decile})", "#B71C1C"
+    if decile <= 4: return f"Below average (decile {decile})", "#E65100"
+    if decile <= 6: return f"Average area (decile {decile})", "#F9A825"
+    if decile <= 8: return f"Above average (decile {decile})", "#558B2F"
+    return f"Least deprived area (decile {decile})", "#1B5E20"
 
 # ========================================
 # QUERY PARAMS
@@ -252,7 +229,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ========================================
-# SIDEBAR (your original)
+# SIDEBAR
 # ========================================
 with st.sidebar:
     st.header("🔍 Search")
@@ -293,7 +270,6 @@ if postcode_query:
         distance_warning = f"⚠️ Couldn't find postcode **{postcode_query}** — check spelling and try again."
     else:
         if {"Latitude", "Longitude"}.issubset(filtered.columns):
-            # Safe distance calculation
             valid = filtered["Latitude"].notna() & filtered["Longitude"].notna()
             filtered["Distance (km)"] = np.nan
             if valid.any():
@@ -441,7 +417,7 @@ if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
         st.divider()
 
 # ========================================
-# RESULTS CARDS – YOUR ORIGINAL LAYOUT
+# RESULTS CARDS
 # ========================================
 if len(filtered) == 0:
     st.markdown("### 🔍 No schools found")
