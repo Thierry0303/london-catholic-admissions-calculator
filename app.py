@@ -100,7 +100,7 @@ def merge_and_prefer_first_pref(master, dfe):
     # PAN: master preferred, fallback to DfE
     if "PAN" not in merged.columns:
         merged["PAN"] = 1
-    merged["PAN"] = merged["PAN"].fillna(merged.get("PAN_DfE", 1)).replace(0, 1).astype(int)
+merged["PAN"] = merged["PAN"].fillna(merged.get("PAN_DfE", 1)).replace(0, 1).astype(int)
 
     # Calculate ratio
     ratio = merged["Apps Received 2025"] / merged["PAN"].astype(float)
