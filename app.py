@@ -313,9 +313,14 @@ if postcode_query:
         if {"Latitude", "Longitude"}.issubset(filtered.columns):
             filtered = filtered.dropna(subset=["Latitude", "Longitude"])
             def safe_distance(r):
-                if pd.isna(r["Latitude"]) or pd.isna(r["Longitude"]):
+                try:
+                    lat = float(r["Latitude"])
+                    lon = float(r["Longitude"])
+                    if math.isnan(lat) or math.isnan(lon):
+                        return None
+                    return round(haversine_km(home_lat, home_lon, lat, lon), 1)
+                except (TypeError, ValueError):
                     return None
-                return round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1)
             filtered["Distance (km)"] = filtered.apply(safe_distance, axis=1)
             filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
         else:
@@ -697,4 +702,3 @@ with st.expander("ℹ️ About this data"):
     )
 
 # ========================================
-
