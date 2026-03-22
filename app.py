@@ -21,10 +21,16 @@ def load_data():
     else:
         df = pd.read_csv(FULL_GITHUB)
 
-    df["PAN"] = pd.to_numeric(df.get("PAN"), errors="coerce").fillna(0).astype(int)
-    df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025"), errors="coerce").fillna(0).astype(int)
-    df["Oversub Ratio"] = (df["Apps Received 2025"] / df["PAN"].replace(0, 1)) * 100
-    df["Oversub Ratio"] = df["Oversub Ratio"].round(0).astype(int)
+    df["PAN"] = pd.to_numeric(df["PAN"] if "PAN" in df.columns else 0, errors="coerce").fillna(0).astype(int)
+    df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"] if "Apps Received 2025" in df.columns else 0, errors="coerce").fillna(0).astype(int)
+    pan_safe = df["PAN"].replace(0, np.nan)
+    df["Oversub Ratio"] = (
+        (df["Apps Received 2025"] / pan_safe * 100)
+        .replace([np.inf, -np.inf], 0)
+        .fillna(0)
+        .round(0)
+        .astype(int)
+    )
 
     for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
         if col not in df.columns:
@@ -689,3 +695,4 @@ with st.expander("ℹ️ About this data"):
     )
 
 # ========================================
+
