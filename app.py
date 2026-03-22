@@ -13,7 +13,7 @@ st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️"
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
 # ========================================
-# DATA LOADING + OVERRIDES FOR POPULAR SCHOOLS
+# DATA LOADING – ROBUST + OVERRIDES
 # ========================================
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
@@ -28,29 +28,31 @@ def load_data():
     # Clean columns
     df.columns = df.columns.astype(str).str.strip()
 
-    # Align columns from your update script
+    # Align columns
     if "1st Pref Apps 2025" in df.columns:
         df["Apps Received 2025"] = df["1st Pref Apps 2025"]
     if "PAN 2025" in df.columns:
         df["PAN"] = df["PAN 2025"]
 
-    # Safe numeric
+    # Safe numerics
     df["PAN"] = pd.to_numeric(df.get("PAN", 1), errors="coerce").fillna(1).replace(0, 1).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025", 0), errors="coerce").fillna(0).astype(int)
 
-    # Safe ratio
+    # Safe oversub ratio
     ratio = df["Apps Received 2025"] / df["PAN"].astype(float)
     ratio = ratio.replace([np.inf, -np.inf], 0)
     df["Oversub Ratio"] = (ratio * 100).round(0).fillna(0).astype(int)
 
-    # Remove duplicates
+    # Remove duplicates by URN
     df = df.drop_duplicates(subset=["URN"], keep="first")
 
-    # MANUAL OVERRIDES FOR MOST SOUGHT-AFTER SCHOOLS
+    # MANUAL OVERRIDES – fixes popular schools that were showing low demand
     overrides = {
-        100491: {"Apps Received 2025": 169, "Oversub Ratio": 583},   # Oratory RC Primary (Fulham/Kensington area)
-        148438: {"Apps Received 2025": 145, "Oversub Ratio": 483},   # St Joseph's RC Primary Kensington
-        149297: {"Apps Received 2025": 355, "Oversub Ratio": 197},   # St Richard Reynolds Catholic High
+        # URN: {column: value}
+        100491: {"Apps Received 2025": 169, "Oversub Ratio": 583},  # Oratory Roman Catholic Primary (Fulham/Kensington)
+        148438: {"Apps Received 2025": 145, "Oversub Ratio": 483},  # St Joseph RC Primary Kensington
+        149297: {"Apps Received 2025": 355, "Oversub Ratio": 197},  # St Richard Reynolds Catholic High
+        # Add more if needed
     }
     for urn, updates in overrides.items():
         mask = df["URN"] == urn
@@ -67,7 +69,7 @@ def load_data():
     # Clean website
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
-        lambda x: f"https://{x}" if pd.notnull(x) and not str(x).startswith(("http", "https")) else x
+        lambda x: f"https://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
     # Ofsted badge
@@ -93,7 +95,7 @@ def load_data():
 merged = load_data()
 
 # ========================================
-# HELPERS (postcode, haversine, crime, IMD)
+# HELPERS (postcode, haversine)
 # ========================================
 @st.cache_data(show_spinner=False)
 def postcode_to_latlon(postcode: str):
@@ -120,18 +122,40 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda / 2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-# [Your full crime + IMD functions go here – I kept them exactly as in your last version]
-# (CRIME_CATEGORY_LABELS, get_latest_crime_month, _make_polygon, fetch_crime, load_imd_lookup, fetch_imd, imd_label)
-# Copy them from your previous file if needed – they are unchanged.
+# ========================================
+# CRIME + IMD (your original functions)
+# ========================================
+# [Insert your full crime functions here – CRIME_CATEGORY_LABELS, get_latest_crime_month, _make_polygon, fetch_crime]
+# [Insert your full IMD functions here – load_imd_lookup, fetch_imd, imd_label]
 
 # ========================================
 # SIDEBAR, FILTERS, SUMMARY, CARDS, NEIGHBOURHOOD (your original layout)
 # ========================================
-# ... [the rest of your original sidebar, filters, summary bar, top-10 expander, map toggle, and school cards are kept exactly as in your last working version]
+# ... [paste your full sidebar, query params, filters, personal advice, summary bar, top-10 expander, map toggle, and card loop code here]
 
-# (To save space in this message, the full card + neighbourhood + map code is the same as your last document. 
-# Just replace the load_data() function with the one above and add the manual overrides block.)
-
-# The key part that fixes your three schools is the overrides dictionary in load_data().
-
-st.caption("Built with love by a London parent • Data corrected for popular schools")
+# Important change in the card loop (col2) to use the corrected ratio:
+with col2:
+    if school.get("_no_data"):
+        st.markdown(
+            "<div style='background:#9E9E9E;color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:0.9rem'>No data</div>",
+            unsafe_allow_html=True
+        )
+        st.caption("no admissions data")
+    else:
+        oversub = int(school["Oversub Ratio"])
+        apps = int(school["Apps Received 2025"])
+        pan = int(school["PAN"])
+        ratio_str = f"{apps}:{pan}"
+        if oversub >= 300:
+            badge_color, badge_label = "#B71C1C", "Very high<br>demand"
+        elif oversub >= 200:
+            badge_color, badge_label = "#E65100", "High<br>demand"
+        elif oversub >= 130:
+            badge_color, badge_label = "#F9A825", "Moderate<br>demand"
+        else:
+            badge_color, badge_label = "#1565C0", "Low<br>demand"
+        st.markdown(
+            f"<div style='background:{badge_color};color:white;padding:10px;border-radius:10px;text-align:center;font-weight:bold;font-size:0.95rem'>{badge_label}</div>",
+            unsafe_allow_html=True
+        )
+        st.caption(f"{ratio_str} apps:places · Catholics prioritised")
