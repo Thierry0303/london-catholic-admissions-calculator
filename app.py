@@ -312,9 +312,11 @@ if postcode_query:
     else:
         if {"Latitude", "Longitude"}.issubset(filtered.columns):
             filtered = filtered.dropna(subset=["Latitude", "Longitude"])
-            filtered["Distance (km)"] = filtered.apply(
-                lambda r: round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1), axis=1
-            )
+            def safe_distance(r):
+                if pd.isna(r["Latitude"]) or pd.isna(r["Longitude"]):
+                    return None
+                return round(haversine_km(home_lat, home_lon, r["Latitude"], r["Longitude"]), 1)
+            filtered["Distance (km)"] = filtered.apply(safe_distance, axis=1)
             filtered = filtered[filtered["Distance (km)"] <= max_distance_km]
         else:
             distance_warning = "⚠️ Distance filtering unavailable — coordinate data missing."
