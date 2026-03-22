@@ -53,6 +53,9 @@ def load_data():
     if "Local Authority" in df.columns:
         df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
 
+    # Deduplicate — keep first occurrence per URN
+    df = df.drop_duplicates(subset=["URN"], keep="first").reset_index(drop=True)
+
     return df
 
 
@@ -392,6 +395,7 @@ if len(filtered) > 0:
         with st.expander("🏆 Most competitive schools (by oversubscription)"):
             top10 = (
                 data_schools[data_schools["Oversub Ratio"] > 100]
+                .drop_duplicates(subset=["URN"])
                 .sort_values("Oversub Ratio", ascending=False)
                 .head(10)
                 .reset_index(drop=True)
@@ -702,3 +706,4 @@ with st.expander("ℹ️ About this data"):
     )
 
 # ========================================
+
