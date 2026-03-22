@@ -9,7 +9,7 @@ st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️"
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
 # ========================================
-# DATA LOADING – ROBUST VERSION
+# DATA LOADING
 # ========================================
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
@@ -21,39 +21,31 @@ def load_data():
     else:
         df = pd.read_csv(FULL_GITHUB)
 
-    # Clean column names
-    df.columns = df.columns.astype(str).str.strip()
-
-    # Align column names
+    # Safe column alignment
     if "1st Pref Apps 2025" in df.columns:
         df["Apps Received 2025"] = df["1st Pref Apps 2025"]
     if "PAN 2025" in df.columns:
         df["PAN"] = df["PAN 2025"]
 
-    # Safe numeric conversion
     df["PAN"] = pd.to_numeric(df.get("PAN", 1), errors="coerce").fillna(1).replace(0, 1).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df.get("Apps Received 2025", 0), errors="coerce").fillna(0).astype(int)
 
-    # Safe oversubscription ratio
+    # Safe ratio
     ratio = df["Apps Received 2025"] / df["PAN"].astype(float)
     ratio = ratio.replace([np.inf, -np.inf], 0)
     df["Oversub Ratio"] = (ratio * 100).round(0).fillna(0).astype(int)
 
     df["_no_data"] = (df["Apps Received 2025"] == 0)
 
-    # Fill missing columns
-    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade",
-                "Local Authority", "Postcode", "Phase", "School Name", "Latitude", "Longitude"]:
+    for col in ["Phone", "School Website", "Ofsted Rating", "Last Inspection", "Snobe Overall Grade"]:
         if col not in df.columns:
             df[col] = ""
 
-    # Clean website
     df["School Website"] = df["School Website"].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
     df["School Website"] = df["School Website"].apply(
-        lambda x: f"https://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
+        lambda x: f"http://{x}" if pd.notnull(x) and not str(x).startswith(("http://", "https://")) else x
     )
 
-    # Ofsted badge
     def ofsted_badge(r):
         r = str(r)
         if "Outstanding" in r: return "Outstanding"
@@ -63,11 +55,9 @@ def load_data():
         return "Awaiting"
     df["Ofsted Badge"] = df["Ofsted Rating"].apply(ofsted_badge)
 
-    # Normalise borough
     if "Local Authority" in df.columns:
         df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
 
-    # Clean coordinates
     for col in ["Latitude", "Longitude"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -77,7 +67,7 @@ def load_data():
 merged = load_data()
 
 # ========================================
-# HELPERS (postcode, distance, crime, IMD)
+# POSTCODE → LAT/LNG
 # ========================================
 @st.cache_data(show_spinner=False)
 def postcode_to_latlon(postcode: str):
@@ -105,12 +95,111 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+# ========================================
+# CRIME DATA (your original code)
+# ========================================
+CRIME_CATEGORY_LABELS = {
+    "anti-social-behaviour": "Antisocial behaviour",
+    "bicycle-theft": "Bicycle theft",
+    "burglary": "Burglary",
+    "criminal-damage-arson": "Criminal damage & arson",
+    "drugs": "Drugs",
+    "other-theft": "Other theft",
+    "possession-of-weapons": "Weapons possession",
+    "public-order": "Public order",
+    "robbery": "Robbery",
+    "shoplifting": "Shoplifting",
+    "theft-from-the-person": "Theft from person",
+    "vehicle-crime": "Vehicle crime",
+    "violent-crime": "Violence & sexual offences",
+    "other-crime": "Other crime",
+}
 
-# Your full CRIME + IMD functions (kept exactly as in your document)
-# ... [insert your full CRIME_CATEGORY_LABELS, get_latest_crime_month, _make_polygon, fetch_crime, load_imd_lookup, fetch_imd, imd_label here]
+@st.cache_data(show_spinner=False, ttl=86400)
+def get_latest_crime_month() -> str:
+    import urllib.request, json
+    try:
+        req = urllib.request.Request(
+            "https://data.police.uk/api/crimes-street-dates",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            dates = json.loads(r.read())
+        if dates and isinstance(dates, list):
+            return dates[0]["date"]
+    except Exception:
+        pass
+    return "2025-10"  # safe fallback
+
+def _make_polygon(lat: float, lon: float, radius_km: float = 0.5, points: int = 6) -> str:
+    R = 6371.0
+    coords = []
+    for i in range(points):
+        angle = math.radians(360 / points * i)
+        dlat = (radius_km / R) * math.cos(angle) * (180 / math.pi)
+        dlon = (radius_km / R) * math.sin(angle) * (180 / math.pi) / math.cos(math.radians(lat))
+        coords.append(f"{lat + dlat:.6f},{lon + dlon:.6f}")
+    return ":".join(coords)
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def fetch_crime(lat: float, lon: float):
+    import urllib.request, json
+    month = get_latest_crime_month()
+    poly = _make_polygon(lat, lon, radius_km=0.5)
+    url = f"https://data.police.uk/api/crimes-street/all-crime?poly={poly}&date={month}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            crimes = json.loads(resp.read())
+        if not isinstance(crimes, list):
+            return None, "bad response"
+        counts = {}
+        for c in crimes:
+            cat = c.get("category", "other-crime")
+            label = CRIME_CATEGORY_LABELS.get(cat, cat.replace("-", " ").title())
+            counts[label] = counts.get(label, 0) + 1
+        counts["total"] = sum(counts.values())
+        return counts, month
+    except Exception as e:
+        return None, str(e)
 
 # ========================================
-# LIKELIHOOD CALCULATOR (kept exactly)
+# IMD LOOKUP
+# ========================================
+@st.cache_data(show_spinner=False)
+def load_imd_lookup():
+    for path in [
+        "imd_lookup.csv",
+        "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/imd_lookup.csv",
+    ]:
+        try:
+            df = pd.read_csv(path)
+            df["postcode"] = df["postcode"].astype(str).str.strip().str.upper().str.replace(" ", "", regex=False)
+            return df.set_index("postcode")
+        except Exception:
+            continue
+    return None
+
+def fetch_imd(postcode: str):
+    clean = postcode.strip().upper().replace(" ", "")
+    lookup = load_imd_lookup()
+    if lookup is None or clean not in lookup.index:
+        return None
+    row = lookup.loc[clean]
+    decile = row["imd_decile"]
+    if pd.isna(decile):
+        return None
+    return {"decile": max(1, int(float(decile)))}
+
+def imd_label(decile: int):
+    if decile <= 2: return "Most deprived area (decile {})".format(decile), "#B71C1C"
+    if decile <= 4: return "Below average (decile {})".format(decile), "#E65100"
+    if decile <= 6: return "Average area (decile {})".format(decile), "#F9A825"
+    if decile <= 8: return "Above average (decile {})".format(decile), "#558B2F"
+    return "Least deprived area (decile {})".format(decile), "#1B5E20"
+
+# ========================================
+# LIKELIHOOD CALCULATOR (your original)
 # ========================================
 def calculate_likelihood(row, baptised, church_attendance, sibling):
     priority_score = 0
@@ -128,7 +217,6 @@ def calculate_likelihood(row, baptised, church_attendance, sibling):
     else:
         chance = max(1, 40 - oversub)
     return min(100, round(chance, 1))
-
 
 def chance_explanation(row, baptised, church_attendance, sibling):
     parts = []
@@ -193,7 +281,7 @@ with st.sidebar:
         sibling = st.checkbox("Sibling at school", _qp_sibling)
 
 # ========================================
-# APPLY FILTERS (your original + safe distance)
+# APPLY FILTERS
 # ========================================
 filtered = merged.copy()
 
@@ -205,7 +293,7 @@ if postcode_query:
         distance_warning = f"⚠️ Couldn't find postcode **{postcode_query}** — check spelling and try again."
     else:
         if {"Latitude", "Longitude"}.issubset(filtered.columns):
-            # Safe: only calculate on valid coordinates
+            # Safe distance calculation
             valid = filtered["Latitude"].notna() & filtered["Longitude"].notna()
             filtered["Distance (km)"] = np.nan
             if valid.any():
@@ -255,7 +343,7 @@ if distance_warning:
     st.warning(distance_warning)
 
 # ========================================
-# SUMMARY STATS BAR + TOP 10
+# SUMMARY + TOP 10
 # ========================================
 if len(filtered) > 0:
     data_schools = filtered[~filtered["_no_data"]]
@@ -307,7 +395,7 @@ if len(filtered) > 0:
 st.divider()
 
 # ========================================
-# MAP TOGGLE (safe version)
+# MAP TOGGLE
 # ========================================
 if {"Latitude", "Longitude"}.issubset(filtered.columns) and len(filtered) > 0:
     show_map = st.toggle("🗺️ Show map", value=False)
@@ -450,7 +538,7 @@ else:
                     f"The oversubscription ratio reflects all applicants, not just Catholics."
                 )
 
-            # Neighbourhood context (IMD + Crime) – your original block
+            # Neighbourhood context
             has_coords = pd.notna(school.get("Latitude")) and pd.notna(school.get("Longitude"))
             has_postcode = pd.notna(school.get("Postcode")) and str(school.get("Postcode", "")).strip()
             if has_coords or has_postcode:
