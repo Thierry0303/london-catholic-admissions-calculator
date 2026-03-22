@@ -257,15 +257,21 @@ def normalise(series):
 # Normalise metrics
 filtered["norm_imd"] = normalise(filtered["IMD_rank"])
 filtered["norm_crime"] = normalise(filtered["Crime_index"])
-filtered["norm_distance"] = normalise(filtered["Distance (km)"])
 filtered["norm_oversub"] = normalise(filtered["Oversub Ratio"])
+
+# Distance only if available
+if "Distance (km)" in filtered.columns:
+    filtered["norm_distance"] = normalise(filtered["Distance (km)"])
+    filtered["norm_distance"] = 1 - filtered["norm_distance"]
+else:
+    filtered["norm_distance"] = 0  # neutral value
+
 
 # Invert metrics where lower = better
 filtered["norm_imd"] = 1 - filtered["norm_imd"]
 filtered["norm_crime"] = 1 - filtered["norm_crime"]
 filtered["norm_distance"] = 1 - filtered["norm_distance"]
 
-# Weighted score
 filtered["Best Match Score"] = (
     W_IMD * filtered["norm_imd"] +
     W_CRIME * filtered["norm_crime"] +
