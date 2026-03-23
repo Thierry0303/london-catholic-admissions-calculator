@@ -1,0 +1,52 @@
+name: Refresh admissions data
+
+on:
+  # Run automatically every year on 1 July (data published ~June)
+  schedule:
+    - cron: "0 7 1 7 *"
+
+  # Also allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit the updated CSV
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pandas requests openpyxl
+
+      - name: Run refresh script
+        run: python refresh_data.py
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet catholic_schools_with_pan_coords.csv \
+            && echo "changed=false" >> $GITHUB_OUTPUT \
+            || echo "changed=true"  >> $GITHUB_OUTPUT
+
+      - name: Commit and push updated CSV
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add catholic_schools_with_pan_coords.csv
+          git commit -m "Auto-refresh admissions data $(date +'%Y-%m-%d')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: No changes detected
+        if: steps.changes.outputs.changed == 'false'
+        run: echo "CSV unchanged — nothing to commit."
