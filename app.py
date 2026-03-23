@@ -31,11 +31,15 @@ def load_data():
             except Exception:
                 continue
     if df is None:
-        try:
-            df = pd.read_csv(FULL_GITHUB)
-        except Exception as e:
-            st.error(f"Could not load school data: {e}")
-            return pd.DataFrame()
+        for url in [FULL_GITHUB, FULL_GITHUB.replace("/main/", "/master/")]:
+            try:
+                df = pd.read_csv(url)
+                break
+            except Exception:
+                continue
+    if df is None:
+        st.error("Could not load school data: file not found in repo. Please upload catholic_schools_with_pan_coords.csv to GitHub.")
+        return pd.DataFrame()
 
     df["PAN"] = pd.to_numeric(df["PAN"] if "PAN" in df.columns else 0, errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"] if "Apps Received 2025" in df.columns else 0, errors="coerce").fillna(0).astype(int)
@@ -265,6 +269,9 @@ def chance_explanation(row, baptised, church_attendance, sibling):
 
 
 merged = load_data()
+if merged.empty:
+    st.error("⚠️ School data could not be loaded. Please check back shortly or contact the site owner.")
+    st.stop()
 
 # ========================================
 #  QUERY PARAMS — shareable URLs
