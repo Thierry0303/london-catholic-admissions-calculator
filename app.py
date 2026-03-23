@@ -16,10 +16,26 @@ FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-adm
 
 @st.cache_data(ttl=300)
 def load_data():
-    if os.path.exists(FULL_PATH):
-        df = pd.read_csv(FULL_PATH)
-    else:
-        df = pd.read_csv(FULL_GITHUB)
+    # Try multiple path options for Streamlit Cloud compatibility
+    paths_to_try = [
+        FULL_PATH,
+        os.path.join(os.path.dirname(__file__), FULL_PATH),
+        os.path.join("/mount/src/london-catholic-admissions-calculator", FULL_PATH),
+    ]
+    df = None
+    for path in paths_to_try:
+        if os.path.exists(path):
+            try:
+                df = pd.read_csv(path)
+                break
+            except Exception:
+                continue
+    if df is None:
+        try:
+            df = pd.read_csv(FULL_GITHUB)
+        except Exception as e:
+            st.error(f"Could not load school data: {e}")
+            return pd.DataFrame()
 
     df["PAN"] = pd.to_numeric(df["PAN"] if "PAN" in df.columns else 0, errors="coerce").fillna(0).astype(int)
     df["Apps Received 2025"] = pd.to_numeric(df["Apps Received 2025"] if "Apps Received 2025" in df.columns else 0, errors="coerce").fillna(0).astype(int)
@@ -709,4 +725,3 @@ with st.expander("ℹ️ About this data"):
     )
 
 # ========================================
-
