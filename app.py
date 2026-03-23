@@ -8,6 +8,69 @@ import urllib.parse
 st.set_page_config(page_title="London Catholic Schools 2025", page_icon="✝️", layout="centered")
 st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 
+
+
+# ========================================
+#  SCHOOL SCORE ENGINE
+# ========================================
+OFSTED_SCORE = {"Outstanding": 100, "Good": 75, "Requires Improvement": 40, "Inadequate": 0, "Awaiting": None}
+SNOBE_SCORE  = {"A+": 100, "A": 85, "B": 65, "C": 45, "D": 25, "E": 0}
+
+def compute_score(school, weights, home_lat=None, home_lon=None, max_dist=10,
+                  imd_decile=None, crime_total=None, london_avg_crime=80):
+    """
+    Returns a 0-100 composite score and a per-factor breakdown dict.
+    weights = {ofsted, snobe, distance, imd, crime, demand} each 0-5.
+    """
+    scores   = {}
+    w_active = {}
+
+    # Ofsted
+    ofsted_raw = OFSTED_SCORE.get(str(school.get("Ofsted Badge", "")), None)
+    if ofsted_raw is not None and weights["ofsted"] > 0:
+        scores["ofsted"] = ofsted_raw
+        w_active["ofsted"] = weights["ofsted"]
+
+    # Snobe
+    snobe_raw = SNOBE_SCORE.get(str(school.get("Snobe Overall Grade", "")).strip(), None)
+    if snobe_raw is not None and weights["snobe"] > 0:
+        scores["snobe"] = snobe_raw
+        w_active["snobe"] = weights["snobe"]
+
+    # Distance (only if postcode active)
+    if home_lat and home_lon and weights["distance"] > 0:
+        dist = school.get("Distance (km)")
+        if pd.notna(dist):
+            dist_score = max(0, 100 - (float(dist) / max(max_dist, 0.1)) * 100)
+            scores["distance"] = round(dist_score, 1)
+            w_active["distance"] = weights["distance"]
+
+    # IMD (decile 10 = least deprived = 100, decile 1 = 0)
+    if imd_decile is not None and weights["imd"] > 0:
+        scores["imd"] = (imd_decile - 1) / 9 * 100
+        w_active["imd"] = weights["imd"]
+
+    # Crime (lower = better; normalise against London avg)
+    if crime_total is not None and weights["crime"] > 0:
+        crime_score = max(0, 100 - (crime_total / max(london_avg_crime, 1)) * 50)
+        scores["crime"] = round(crime_score, 1)
+        w_active["crime"] = weights["crime"]
+
+    # Demand / popularity (higher oversub = more popular = higher score)
+    if weights["demand"] > 0 and not school.get("_no_data", False):
+        oversub = float(school.get("Oversub Ratio", 0))
+        # Cap at 300% → 100 points; scale linearly
+        demand_score = min(100, oversub / 3)
+        scores["demand"] = round(demand_score, 1)
+        w_active["demand"] = weights["demand"]
+
+    if not scores:
+        return None, {}
+
+    total_w = sum(w_active.values())
+    composite = sum(scores[k] * w_active[k] for k in scores) / total_w
+    return round(composite), scores
+
 # ========================================
 #  DATA LOADING
 # ========================================
@@ -326,6 +389,18 @@ with st.sidebar:
         church_attendance = st.checkbox("Regular church attendance", _qp_attend)
         sibling = st.checkbox("Sibling at school", _qp_sibling)
 
+    st.divider()
+    st.subheader("🎯 Score weights")
+    st.caption("Drag to set how much each factor matters to you.")
+    w_ofsted   = st.slider("Ofsted rating",    0, 5, 3)
+    w_snobe    = st.slider("Snobe grade",       0, 5, 2)
+    w_distance = st.slider("Distance",          0, 5, 3, disabled=(not postcode_query))
+    w_imd      = st.slider("Area deprivation",  0, 5, 1)
+    w_crime    = st.slider("Crime rate",        0, 5, 2)
+    w_demand   = st.slider("School popularity", 0, 5, 2)
+    score_weights = dict(ofsted=w_ofsted, snobe=w_snobe, distance=w_distance,
+                         imd=w_imd, crime=w_crime, demand=w_demand)
+
 # ========================================
 #  APPLY FILTERS
 # ========================================
@@ -366,9 +441,21 @@ filtered = filtered[filtered["Phase"].isin(selected_phase)]
 filtered = filtered.copy()
 filtered["_no_data"] = (filtered["Apps Received 2025"] == 0) & (filtered["PAN"] == 0)
 
-# Default sort: by distance if postcode active, otherwise by oversubscription
+# Pre-compute score column for sorting
+def _row_score(row):
+    imd_data = fetch_imd(str(row.get("Postcode", "")))
+    imd_dec  = imd_data["decile"] if imd_data else None
+    s, _ = compute_score(row, score_weights,
+                         home_lat=home_lat, home_lon=home_lon,
+                         max_dist=max_distance_km, imd_decile=imd_dec)
+    return s if s is not None else 0
+filtered["_score"] = filtered.apply(_row_score, axis=1)
+
+# Default sort: by distance if postcode active, otherwise by score
 if postcode_query and home_lat and "Distance (km)" in filtered.columns:
     filtered = filtered.sort_values("Distance (km)", ascending=True)
+elif sum(score_weights.values()) > 0:
+    filtered = filtered.sort_values("_score", ascending=False)
 else:
     filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
 
@@ -528,7 +615,7 @@ else:
     # ── Sort control — left: count, right: sort dropdown ──
     count_col, sort_col = st.columns([3, 2])
     with sort_col:
-        sort_options = ["Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
+        sort_options = ["Score (highest first)", "Oversubscription (lowest first)", "Snobe grade", "Ofsted rating", "Alphabetical"]
         if postcode_query and home_lat and "Distance (km)" in filtered.columns:
             sort_options = ["Distance (nearest first)"] + sort_options
         sort_by = st.selectbox("↕️ Sort by", sort_options, label_visibility="visible")
@@ -539,6 +626,9 @@ else:
 
     if sort_by == "Distance (nearest first)" and "Distance (km)" in filtered.columns:
         filtered = filtered.sort_values("Distance (km)", ascending=True)
+    elif sort_by == "Score (highest first)":
+        if "_score" in filtered.columns:
+            filtered = filtered.sort_values("_score", ascending=False)
     elif sort_by == "Oversubscription (lowest first)":
         filtered = filtered[~filtered["_no_data"]].sort_values("Oversub Ratio", ascending=True)
     elif sort_by == "Ofsted rating":
@@ -555,7 +645,21 @@ else:
     with count_col:
         st.subheader(f"{len(filtered)} school{'s' if len(filtered) != 1 else ''}")
 
+    # Pre-fetch IMD for all visible schools (uses postcode lookup, fast)
+    # Crime is fetched lazily inside each card to avoid blocking the page
+
     for _, school in filtered.iterrows():
+        # Compute score for this school
+        imd_data = fetch_imd(str(school.get("Postcode", "")))
+        imd_decile = imd_data["decile"] if imd_data else None
+        school_score, score_breakdown = compute_score(
+            school, score_weights,
+            home_lat=home_lat, home_lon=home_lon,
+            max_dist=max_distance_km,
+            imd_decile=imd_decile,
+            crime_total=None,   # crime loaded lazily below
+        )
+
         with st.container():
             col1, col2 = st.columns([3, 1])
             with col1:
@@ -614,14 +718,57 @@ else:
                         )
                         st.caption(f"{ratio_str} apps:places · Catholics prioritised")
 
+                # Score badge (shown below demand badge if weights active)
+                if school_score is not None and sum(score_weights.values()) > 0:
+                    if school_score >= 75:
+                        score_color = "#1B5E20"
+                    elif school_score >= 55:
+                        score_color = "#33691E"
+                    elif school_score >= 35:
+                        score_color = "#F57F17"
+                    else:
+                        score_color = "#BF360C"
+                    st.markdown(
+                        f"<div style='background:{score_color};color:white;padding:6px 10px;"
+                        f"border-radius:8px;text-align:center;font-weight:bold;"
+                        f"font-size:1.1rem;margin-top:6px'>{school_score}</div>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption("your score")
+
             # How calculated
             with st.expander("ℹ️ About these figures"):
                 st.caption(
-                    f"**{school['Apps Received 2025']:.0f} applications** were made for **{school['PAN']} places** in 2025. "
-                    f"As a Catholic school, places are prioritised for baptised Catholics. "
-                    f"Non-Catholics rarely receive an offer at oversubscribed Catholic schools. "
-                    f"The oversubscription ratio reflects all applicants, not just Catholics."
+                    f"**{school['Apps Received 2025']:.0f} applications** were made for **{school['PAN']} places** in 2025 "
+                    f"(first preference only). As a Catholic school, places are prioritised for baptised Catholics. "
+                    f"Non-Catholics rarely receive an offer at oversubscribed Catholic schools."
                 )
+                if school_score is not None and score_breakdown and sum(score_weights.values()) > 0:
+                    st.markdown("**Score breakdown:**")
+                    factor_labels = {
+                        "ofsted": "Ofsted", "snobe": "Snobe", "distance": "Distance",
+                        "imd": "Area deprivation", "crime": "Crime rate", "demand": "Popularity"
+                    }
+                    rows = ""
+                    for k, label in factor_labels.items():
+                        if k in score_breakdown:
+                            v = score_breakdown[k]
+                            w = score_weights[k]
+                            bar_w = int(v)
+                            bar_c = "#1B5E20" if v >= 75 else "#F57F17" if v >= 40 else "#BF360C"
+                            rows += (
+                                f"<tr><td style='padding:2px 8px;color:#555;font-size:0.82rem'>{label} (×{w})</td>"
+                                f"<td style='padding:2px 8px;width:120px'>"
+                                f"<div style='background:#eee;border-radius:3px;height:8px'>"
+                                f"<div style='background:{bar_c};width:{bar_w}%;height:8px;border-radius:3px'></div>"
+                                f"</div></td>"
+                                f"<td style='padding:2px 8px;font-size:0.82rem;color:{bar_c};font-weight:bold'>{int(v)}</td></tr>"
+                            )
+                    st.markdown(
+                        f"<table style='width:100%;border-collapse:collapse'>{rows}</table>",
+                        unsafe_allow_html=True
+                    )
+                    st.caption(f"Overall score: **{school_score}/100**")
 
             # Neighbourhood context (crime + IMD)
             has_coords = pd.notna(school.get("Latitude")) and pd.notna(school.get("Longitude"))
@@ -732,3 +879,4 @@ with st.expander("ℹ️ About this data"):
     )
 
 # ========================================
+
