@@ -14,7 +14,7 @@ st.markdown('<a name="top"></a>', unsafe_allow_html=True)
 FULL_PATH = "catholic_schools_with_pan_coords.csv"
 FULL_GITHUB = "https://raw.githubusercontent.com/Thierry0303/london-catholic-admissions-calculator/main/catholic_schools_with_pan_coords.csv"
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_data():
     if os.path.exists(FULL_PATH):
         df = pd.read_csv(FULL_PATH)
@@ -52,6 +52,9 @@ def load_data():
 
     if "Local Authority" in df.columns:
         df["Local Authority"] = df["Local Authority"].astype(str).str.strip().str.title()
+
+    # Drop phantom rows: schools with a PAN but zero apps (data corruption artefact)
+    df = df[~((df["Apps Received 2025"] == 0) & (df["PAN"] > 0))].copy()
 
     # Deduplicate — keep first occurrence per URN
     df = df.drop_duplicates(subset=["URN"], keep="first").reset_index(drop=True)
